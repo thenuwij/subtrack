@@ -1,0 +1,13 @@
+# Backend
+subtrack-backend/.env
+subtrack-backend/venv/
+subtrack-backend/__pycache__/
+subtrack-backend/*.pyc
+
+# Frontend
+subtrack-frontend/.env.local
+subtrack-frontend/node_modules/
+subtrack-frontend/.next/
+
+# General
+.DS_Store
