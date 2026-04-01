@@ -15,6 +15,8 @@ class SubscriptionCreate(BaseModel):
     category: Category
     amount: float
     currency: str = "AUD"
+    exchange_rate: float = 1.0
+    converted_amount: Optional[float] = None 
     cycle: BillingCycle
     next_due: Optional[datetime] = None
 

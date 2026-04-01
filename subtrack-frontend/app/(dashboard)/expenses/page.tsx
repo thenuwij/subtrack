@@ -9,6 +9,7 @@ import { AddExpenseModal }   from '@/components/expenses/AddExpenseModal'
 import { Button }            from '@/components/ui/button'
 import { Skeleton }          from '@/components/ui/skeleton'
 import { Plus, Receipt }     from 'lucide-react'
+import { useCurrency } from '@/lib/context/currency'
 
 export default function ExpensesPage() {
   const supabase = createClient()
@@ -17,6 +18,7 @@ export default function ExpensesPage() {
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
+  const { baseCurrency } = useCurrency()
 
   async function fetchExpenses() {
     const { data: { session } } = await supabase.auth.getSession()
@@ -54,7 +56,7 @@ export default function ExpensesPage() {
       return d.getMonth() === thisMonth.getMonth() &&
         d.getFullYear() === thisMonth.getFullYear()
     })
-    .reduce((sum, e) => sum + e.amount, 0)
+    .reduce((sum, e) => sum + (e.converted_amount ?? e.amount), 0)
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
@@ -63,7 +65,7 @@ export default function ExpensesPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Expenses</h1>
           {!loading && expenses.length > 0 && (
             <p className="text-sm text-muted-foreground mt-0.5">
-              {expenses[0]?.currency ?? 'AUD'} {monthlyTotal.toFixed(2)} this month
+              {baseCurrency} {monthlyTotal.toFixed(2)} this month
             </p>
           )}
         </div>

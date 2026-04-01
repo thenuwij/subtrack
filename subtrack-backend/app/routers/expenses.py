@@ -15,6 +15,8 @@ class ExpenseCreate(BaseModel):
     category: Category
     amount: float
     currency: str = "AUD"
+    exchange_rate: float = 1.0
+    converted_amount: Optional[float] = None
     date: datetime
     note: Optional[str] = None
 

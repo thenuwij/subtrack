@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Trash2 } from 'lucide-react'
+import { useCurrency } from '@/lib/context/currency'
 
 const CATEGORY_STYLES: Record<string, string> = {
   streaming:  'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
@@ -26,6 +27,7 @@ interface Props {
 export function ExpenseCard({ expense, onDelete }: Props) {
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting]     = useState(false)
+  const { baseCurrency } = useCurrency()
 
   async function handleDelete() {
     setDeleting(true)
@@ -64,6 +66,13 @@ export function ExpenseCard({ expense, onDelete }: Props) {
             <p className="font-semibold text-sm tabular-nums">
               {expense.currency} {expense.amount.toFixed(2)}
             </p>
+            {expense.converted_amount != null && expense.currency !== baseCurrency && (
+              <p className="text-xs text-muted-foreground mt-0.5">
+                ≈ {baseCurrency} {expense.converted_amount.toFixed(2)}
+                <span className="ml-1">at {expense.exchange_rate.toFixed(4)}</span>
+              </p>
+            )}
+
             <p className="text-xs text-muted-foreground mt-0.5">
               {new Date(expense.date).toLocaleDateString('en-AU')}
             </p>

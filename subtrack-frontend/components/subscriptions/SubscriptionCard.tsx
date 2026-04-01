@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Trash2, Calendar } from 'lucide-react'
+import { useCurrency } from '@/lib/context/currency'
 
 const CATEGORY_STYLES: Record<string, string> = {
   streaming:  'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
@@ -49,6 +50,7 @@ interface Props {
 export function SubscriptionCard({ subscription, onDelete }: Props) {
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting]     = useState(false)
+  const { baseCurrency } = useCurrency()
 
   const due = subscription.next_due ? formatDueDate(subscription.next_due) : null
 
@@ -107,6 +109,12 @@ export function SubscriptionCard({ subscription, onDelete }: Props) {
                 {CYCLE_LABEL[subscription.cycle]}
               </span>
             </p>
+            {subscription.converted_amount != null && subscription.currency !== baseCurrency && (
+              <p className='text-xs text-muted-foreground mt-0.5'>
+                ≈ {baseCurrency} {subscription.converted_amount.toFixed(2)}
+                <span className="ml-1">at {subscription.exchange_rate.toFixed(4)}</span>
+              </p>
+            )}
 
             <div className="flex justify-end mt-2 h-7">
               {!confirming ? (

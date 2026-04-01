@@ -1,62 +1,103 @@
 'use client'
 
-import { useState } from 'react'
-import { BillingCycle, Category, Subscription } from '@/types'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import { Button }   from '@/components/ui/button'
-import { Input }    from '@/components/ui/input'
-import { Label }    from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { useState, useEffect } from 'react'
+import { BillingCycle, Category, Currency, Subscription } from '@/types'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { useCurrency } from '@/lib/context/currency'
+import { getRates } from '@/lib/api'
+import { createClient } from '@/lib/supabase/client'
 
-const CATEGORIES: Category[] = [
-  'streaming', 'software', 'cloud', 'utilities',
-  'fitness', 'food', 'transport', 'other',
-]
-
+const CATEGORIES: Category[] = ['streaming', 'software', 'cloud', 'utilities', 'fitness', 'food', 'transport', 'other']
 const CYCLES: BillingCycle[] = ['weekly', 'monthly', 'yearly']
+const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
 
 interface FormState {
-  name:      string
-  category:  Category
-  amount:    string
-  currency:  string
-  cycle:     BillingCycle
-  next_due:  string
+  name: string
+  category: Category
+  amount: string
+  currency: Currency
+  cycle: BillingCycle
+  next_due: string
   is_active: boolean
 }
 
-const DEFAULT_FORM: FormState = {
-  name:      '',
-  category:  'other',
-  amount:    '',
-  currency:  'AUD',
-  cycle:     'monthly',
-  next_due:  '',
-  is_active: true,
-}
-
 interface Props {
-  open:      boolean
-  onClose:   () => void
-  onSubmit:  (data: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) => Promise<void>
+  open: boolean
+  onClose: () => void
+  onSubmit: (data: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) => Promise<void>
 }
 
 export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
-  const [form, setForm]       = useState<FormState>(DEFAULT_FORM)
+  const { baseCurrency } = useCurrency()
+
+  const DEFAULT_FORM: FormState = {
+    name: '',
+    category: 'other',
+    amount: '',
+    currency: baseCurrency,  // default to user's base currency
+    cycle: 'monthly',
+    next_due: '',
+    is_active: true,
+  }
+
+  const [form, setForm] = useState<FormState>(DEFAULT_FORM)
   const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // Exchange rate state
+  const [exchangeRate, setExchangeRate] = useState<number>(1.0)
+  const [rateLoading, setRateLoading] = useState(false)
+  const [rateError, setRateError] = useState<string | null>(null)
+
+  // Fetch rate whenever currency changes and it differs from base currency
+  // This useEffect runs every time form.currency or baseCurrency changes
+  useEffect(() => {
+    if (form.currency === baseCurrency) {
+      setExchangeRate(1.0)  // same currency, no conversion needed
+      return
+    }
+
+    async function fetchRate() {
+      setRateLoading(true)
+      setRateError(null)
+      try {
+        const supabase = createClient()
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session) return
+
+        // GET /rates?base=AUD returns { rates: { USD: 0.63, ... } }
+        // We need the inverse: how many AUD per 1 USD
+        // If 1 AUD = 0.63 USD, then 1 USD = 1/0.63 = 1.587 AUD
+        const data = await getRates(session.access_token, baseCurrency)
+        const rate = data.rates[form.currency]
+
+        if (!rate) {
+          setRateError('Rate unavailable for this currency')
+          return
+        }
+
+        // Invert: getRates gives "how much foreign per 1 base"
+        // We want "how much base per 1 foreign"
+        setExchangeRate(parseFloat((1 / rate).toFixed(6)))
+      } catch {
+        setRateError('Could not fetch exchange rate')
+      } finally {
+        setRateLoading(false)
+      }
+    }
+
+    fetchRate()
+  }, [form.currency, baseCurrency])
+
+  // Derived: converted amount shown as preview
+  const amount = parseFloat(form.amount)
+  const convertedAmount = !isNaN(amount) && amount > 0
+    ? parseFloat((amount * exchangeRate).toFixed(2))
+    : null
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm(prev => ({ ...prev, [key]: value }))
@@ -64,21 +105,23 @@ export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
   }
 
   async function handleSubmit() {
-    if (!form.name.trim())        return setError('Name is required.')
-    const amount = parseFloat(form.amount)
+    if (!form.name.trim()) return setError('Name is required.')
     if (isNaN(amount) || amount <= 0) return setError('Enter a valid amount greater than 0.')
-    if (!form.currency.trim())    return setError('Currency is required.')
+    if (rateLoading) return setError('Waiting for exchange rate, please try again.')
+    if (rateError) return setError('Exchange rate unavailable. Cannot submit.')
 
     setLoading(true)
     setError(null)
     try {
       await onSubmit({
-        name:      form.name.trim(),
-        category:  form.category,
+        name: form.name.trim(),
+        category: form.category,
         amount,
-        currency:  form.currency.trim().toUpperCase(),
-        cycle:     form.cycle,
-        next_due:  form.next_due || null,
+        currency: form.currency,
+        exchange_rate: exchangeRate,
+        converted_amount: form.currency === baseCurrency ? amount : convertedAmount,
+        cycle: form.cycle,
+        next_due: form.next_due || null,
         is_active: form.is_active,
       })
       setForm(DEFAULT_FORM)
@@ -97,6 +140,8 @@ export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
     onClose()
   }
 
+  const isForeignCurrency = form.currency !== baseCurrency
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-md">
@@ -106,115 +151,78 @@ export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
 
         <div className="grid gap-4 py-2">
 
-          {/* Name */}
           <div className="grid gap-1.5">
             <Label htmlFor="sub-name">Name</Label>
-            <Input
-              id="sub-name"
-              placeholder="Netflix, GitHub Pro…"
-              value={form.name}
-              onChange={e => set('name', e.target.value)}
-              disabled={loading}
-            />
+            <Input id="sub-name" placeholder="Netflix, GitHub Pro…" value={form.name} onChange={e => set('name', e.target.value)} disabled={loading} />
           </div>
 
-          {/* Category */}
           <div className="grid gap-1.5">
             <Label>Category</Label>
-            <Select
-              value={form.category}
-              onValueChange={v => set('category', v as Category)}
-              disabled={loading}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
+            <Select value={form.category} onValueChange={v => set('category', v as Category)} disabled={loading}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {CATEGORIES.map(c => (
-                  <SelectItem key={c} value={c} className="capitalize">
-                    {c}
-                  </SelectItem>
-                ))}
+                {CATEGORIES.map(c => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
 
-          {/* Amount + Currency */}
+          {/* Amount + Currency — side by side */}
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
               <Label htmlFor="sub-amount">Amount</Label>
-              <Input
-                id="sub-amount"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                value={form.amount}
-                onChange={e => set('amount', e.target.value)}
-                disabled={loading}
-              />
+              <Input id="sub-amount" type="number" min="0" step="0.01" placeholder="0.00" value={form.amount} onChange={e => set('amount', e.target.value)} disabled={loading} />
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="sub-currency">Currency</Label>
-              <Input
-                id="sub-currency"
-                placeholder="AUD"
-                maxLength={3}
-                value={form.currency}
-                onChange={e => set('currency', e.target.value.toUpperCase())}
-                disabled={loading}
-              />
+              <Label>Currency</Label>
+              {/* Dropdown instead of free text — only supported currencies */}
+              <Select value={form.currency} onValueChange={v => set('currency', v as Currency)} disabled={loading}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {CURRENCIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
-          {/* Billing cycle */}
+          {/* Rate preview — only shown when foreign currency selected */}
+          {isForeignCurrency && (
+            <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+              {rateLoading && 'Fetching rate…'}
+              {rateError && <span className="text-destructive">{rateError}</span>}
+              {!rateLoading && !rateError && (
+                <span>
+                  1 {form.currency} = {exchangeRate.toFixed(4)} {baseCurrency}
+                  {convertedAmount && (
+                    <span className="ml-2 font-medium text-foreground">
+                      ≈ {baseCurrency} {convertedAmount.toFixed(2)}
+                    </span>
+                  )}
+                </span>
+              )}
+            </div>
+          )}
+
           <div className="grid gap-1.5">
             <Label>Billing cycle</Label>
-            <Select
-              value={form.cycle}
-              onValueChange={v => set('cycle', v as BillingCycle)}
-              disabled={loading}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
+            <Select value={form.cycle} onValueChange={v => set('cycle', v as BillingCycle)} disabled={loading}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {CYCLES.map(c => (
-                  <SelectItem key={c} value={c} className="capitalize">
-                    {c}
-                  </SelectItem>
-                ))}
+                {CYCLES.map(c => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
 
-          {/* Next due date */}
           <div className="grid gap-1.5">
-            <Label htmlFor="sub-due">
-              Next renewal date{' '}
-              <span className="text-muted-foreground font-normal">(optional)</span>
-            </Label>
-            <Input
-              id="sub-due"
-              type="date"
-              value={form.next_due}
-              onChange={e => set('next_due', e.target.value)}
-              disabled={loading}
-            />
+            <Label htmlFor="sub-due">Next renewal date <span className="font-normal text-muted-foreground">(optional)</span></Label>
+            <Input id="sub-due" type="date" value={form.next_due} onChange={e => set('next_due', e.target.value)} disabled={loading} />
           </div>
 
-          {/* Error */}
-          {error && (
-            <p className="text-sm text-destructive">{error}</p>
-          )}
-
+          {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
 
         <DialogFooter className="gap-2">
-          <Button variant="outline" onClick={handleClose} disabled={loading}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} disabled={loading}>
+          <Button variant="outline" onClick={handleClose} disabled={loading}>Cancel</Button>
+          <Button onClick={handleSubmit} disabled={loading || rateLoading}>
             {loading ? 'Adding…' : 'Add subscription'}
           </Button>
         </DialogFooter>

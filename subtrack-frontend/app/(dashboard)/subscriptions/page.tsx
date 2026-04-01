@@ -9,13 +9,15 @@ import { AddSubscriptionModal }   from '@/components/subscriptions/AddSubscripti
 import { Button }                 from '@/components/ui/button'
 import { Skeleton }               from '@/components/ui/skeleton'
 import { Plus, CreditCard }       from 'lucide-react'
+import { useCurrency } from '@/lib/context/currency'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function monthlyEquivalent(sub: Subscription): number {
-  if (sub.cycle === 'weekly')  return sub.amount * 52  / 12
-  if (sub.cycle === 'yearly')  return sub.amount       / 12
-  return sub.amount
+  const amount = sub.converted_amount ?? sub.amount
+  if (sub.cycle === 'weekly')  return amount * 52  / 12
+  if (sub.cycle === 'yearly')  return amount       / 12
+  return amount
 }
 
 // ─── page ─────────────────────────────────────────────────────────────────────
@@ -27,6 +29,7 @@ export default function SubscriptionsPage() {
   const [loading, setLoading]             = useState(true)
   const [error, setError]                 = useState<string | null>(null)
   const [modalOpen, setModalOpen]         = useState(false)
+  const { baseCurrency } = useCurrency()
 
   // ── fetch ──────────────────────────────────────────────────────────────────
 
@@ -82,8 +85,7 @@ export default function SubscriptionsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Subscriptions</h1>
           {!loading && subscriptions.length > 0 && (
             <p className="text-sm text-muted-foreground mt-0.5">
-              {active.length} active · ~{subscriptions[0]?.currency ?? 'AUD'}{' '}
-              {totalMonthly.toFixed(2)}/mo
+              {active.length} active · ~{baseCurrency} {totalMonthly.toFixed(2)}/mo
             </p>
           )}
         </div>

@@ -5,15 +5,16 @@ import { CalendarDays, CreditCard, Receipt, Wallet } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { getSubscriptions, getExpenses, getBudgets } from '@/lib/api'
 import type { Subscription, Expense, Budget } from '@/types'
+import { useCurrency } from '@/lib/context/currency'
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
 }
 
-function formatCurrency(amount: number) {
+function formatCurrency(amount: number, currency: string) {
   return new Intl.NumberFormat('en-AU', {
     style: 'currency',
-    currency: 'AUD',
+    currency: currency,
     maximumFractionDigits: 2,
   }).format(amount)
 }
@@ -74,6 +75,7 @@ export default function DashboardPage() {
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [budgets, setBudgets] = useState<Budget[]>([])
   const [loading, setLoading] = useState(true)
+  const { baseCurrency } = useCurrency()
 
   useEffect(() => {
     async function fetchData() {
@@ -107,8 +109,8 @@ export default function DashboardPage() {
   const currentMonth = new Date()
 
   const monthlyBurn = useMemo(() => {
-    return subscriptions.reduce((sum, subscription) => {
-      return sum + toMonthly(subscription.amount, subscription.cycle)
+    return subscriptions.reduce((sum, s) => {
+      return sum + toMonthly(s.converted_amount ?? s.amount, s.cycle)
     }, 0)
   }, [subscriptions])
 
@@ -123,7 +125,7 @@ export default function DashboardPage() {
   }, [expenses, currentMonth])
 
   const totalExpenses = useMemo(() => {
-    return monthlyExpenses.reduce((sum, expense) => sum + expense.amount, 0)
+    return monthlyExpenses.reduce((sum, e) => sum + (e.converted_amount ?? e.amount), 0)
   }, [monthlyExpenses])
 
   const upcoming = useMemo(() => {
@@ -205,10 +207,10 @@ export default function DashboardPage() {
             </div>
             <p className="text-sm text-muted-foreground">Monthly subscriptions</p>
             <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
-              {formatCurrency(monthlyBurn)}
+              {formatCurrency(monthlyBurn, baseCurrency)}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {formatCurrency(monthlyBurn * 12)} estimated yearly spend
+              {formatCurrency(monthlyBurn * 12,  baseCurrency)} estimated yearly spend
             </p>
           </div>
 
@@ -223,7 +225,7 @@ export default function DashboardPage() {
             </div>
             <p className="text-sm text-muted-foreground">Expense total</p>
             <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
-              {formatCurrency(totalExpenses)}
+              {formatCurrency(totalExpenses,  baseCurrency)}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
               {monthlyExpenses.length} transaction{monthlyExpenses.length === 1 ? '' : 's'} logged
@@ -241,7 +243,7 @@ export default function DashboardPage() {
             </div>
             <p className="text-sm text-muted-foreground">Remaining tracked budget</p>
             <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
-              {formatCurrency(remainingBudget)}
+              {formatCurrency(remainingBudget,  baseCurrency)}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
               {budgets.length} active categor{budgets.length === 1 ? 'y' : 'ies'}
@@ -316,7 +318,7 @@ export default function DashboardPage() {
                       <div className="flex items-center justify-between gap-4 sm:justify-end">
                         <div className="text-left sm:text-right">
                           <p className="text-sm font-semibold text-foreground">
-                            {formatCurrency(subscription.amount)}
+                            {formatCurrency(subscription.amount,  baseCurrency)}
                           </p>
                           <p className="text-xs text-muted-foreground">
                             Due {formatDate(subscription.next_due)}
@@ -382,7 +384,7 @@ export default function DashboardPage() {
                             {budget.category}
                           </p>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            {formatCurrency(spent)} of {formatCurrency(budget.monthly_limit)}
+                            {formatCurrency(spent,  baseCurrency)} of {formatCurrency(budget.monthly_limit,  baseCurrency)}
                           </p>
                         </div>
 
@@ -404,8 +406,8 @@ export default function DashboardPage() {
                         <span>{Math.round(percent)}%</span>
                         <span>
                           {budget.monthly_limit - spent > 0
-                            ? `${formatCurrency(budget.monthly_limit - spent)} left`
-                            : `${formatCurrency(spent - budget.monthly_limit)} over`}
+                            ? `${formatCurrency(budget.monthly_limit - spent,  baseCurrency)} left`
+                            : `${formatCurrency(spent - budget.monthly_limit, baseCurrency)} over`}
                         </span>
                       </div>
                     </div>
