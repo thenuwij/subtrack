@@ -90,3 +90,31 @@ export async function deleteBudget(token: string, id: string) {
   if (!res.ok) throw new Error('Failed to delete budget')
   return res.json()
 }
+
+// Rates
+export async function getRates(token: string, base: string = 'AUD') {
+  const res = await fetch(`${API_URL}/rates?base=${base}`, {
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to fetch exchange rates')
+  return res.json()
+}
+
+// Preferences
+export async function getPreferences(token: string) {
+  const res = await fetch(`${API_URL}/preferences`, {
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to fetch preferences')
+  return res.json()
+}
+
+export async function updatePreferences(token: string, base_currency: string) {
+  const res = await fetch(`${API_URL}/preferences`, {
+    method: 'PATCH',
+    headers: await getHeaders(token),
+    body: JSON.stringify({ base_currency }),
+  })
+  if (!res.ok) throw new Error('Failed to update preferences')
+  return res.json()
+}

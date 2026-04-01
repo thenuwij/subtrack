@@ -1,9 +1,73 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { CalendarDays, CreditCard, Receipt, Wallet } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { getSubscriptions, getExpenses, getBudgets } from '@/lib/api'
 import type { Subscription, Expense, Budget } from '@/types'
+
+function Skeleton({ className }: { className?: string }) {
+  return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
+}
+
+function formatCurrency(amount: number) {
+  return new Intl.NumberFormat('en-AU', {
+    style: 'currency',
+    currency: 'AUD',
+    maximumFractionDigits: 2,
+  }).format(amount)
+}
+
+function formatDate(date: string | null | undefined) {
+  if (!date) return ''
+  return new Date(date).toLocaleDateString('en-AU', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
+}
+
+function getDaysUntil(date: string | null | undefined) {
+  if (!date) return null
+  const today = new Date()
+  const target = new Date(date)
+
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  const startOfTarget = new Date(target.getFullYear(), target.getMonth(), target.getDate())
+
+  const diffMs = startOfTarget.getTime() - startOfToday.getTime()
+  return Math.ceil(diffMs / (1000 * 60 * 60 * 24))
+}
+
+function toMonthly(amount: number, cycle: string) {
+  if (cycle === 'weekly') return amount * 4.33
+  if (cycle === 'yearly') return amount / 12
+  return amount
+}
+
+function getBudgetTone(percent: number) {
+  if (percent >= 100) {
+    return {
+      bar: 'bg-destructive',
+      badge: 'text-destructive bg-destructive/10 border-destructive/20',
+      label: 'Over budget',
+    }
+  }
+
+  if (percent >= 80) {
+    return {
+      bar: 'bg-amber-500',
+      badge: 'text-amber-600 bg-amber-500/10 border-amber-500/20 dark:text-amber-400',
+      label: 'Near limit',
+    }
+  }
+
+  return {
+    bar: 'bg-primary',
+    badge: 'text-primary bg-primary/10 border-primary/20',
+    label: 'On track',
+  }
+}
 
 export default function DashboardPage() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
@@ -13,127 +77,344 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function fetchData() {
-      const supabase = createClient()
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) return
+      try {
+        const supabase = createClient()
+        const {
+          data: { session },
+        } = await supabase.auth.getSession()
 
-      const token = session.access_token
-      const [subs, exps, buds] = await Promise.all([
-        getSubscriptions(token),
-        getExpenses(token),
-        getBudgets(token),
-      ])
-      setSubscriptions(subs)
-      setExpenses(exps)
-      setBudgets(buds)
-      setLoading(false)
+        if (!session) return
+
+        const token = session.access_token
+        console.log("TOKEN:", token) 
+        const [subs, exps, buds] = await Promise.all([
+          getSubscriptions(token),
+          getExpenses(token),
+          getBudgets(token),
+        ])
+
+        setSubscriptions(subs)
+        setExpenses(exps)
+        setBudgets(buds)
+      } finally {
+        setLoading(false)
+      }
     }
+
     fetchData()
   }, [])
 
-  function toMonthly(amount: number, cycle: string) {
-    if (cycle === 'weekly') return amount * 4.33
-    if (cycle === 'yearly') return amount / 12
-    return amount
-  }
+  const currentMonth = new Date()
 
-  const monthlyBurn = subscriptions.reduce(
-    (sum, s) => sum + toMonthly(s.amount, s.cycle), 0
-  )
+  const monthlyBurn = useMemo(() => {
+    return subscriptions.reduce((sum, subscription) => {
+      return sum + toMonthly(subscription.amount, subscription.cycle)
+    }, 0)
+  }, [subscriptions])
 
-  const thisMonth = new Date()
-  const monthlyExpenses = expenses.filter(e => {
-    const d = new Date(e.date)
-    return d.getMonth() === thisMonth.getMonth() &&
-      d.getFullYear() === thisMonth.getFullYear()
-  })
-  const totalExpenses = monthlyExpenses.reduce((sum, e) => sum + e.amount, 0)
+  const monthlyExpenses = useMemo(() => {
+    return expenses.filter((expense) => {
+      const expenseDate = new Date(expense.date)
+      return (
+        expenseDate.getMonth() === currentMonth.getMonth() &&
+        expenseDate.getFullYear() === currentMonth.getFullYear()
+      )
+    })
+  }, [expenses, currentMonth])
 
-  const upcoming = subscriptions
-    .filter(s => s.next_due)
-    .sort((a, b) => new Date(a.next_due!).getTime() - new Date(b.next_due!).getTime())
-    .slice(0, 5)
+  const totalExpenses = useMemo(() => {
+    return monthlyExpenses.reduce((sum, expense) => sum + expense.amount, 0)
+  }, [monthlyExpenses])
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-64 text-gray-400">
-      Loading...
-    </div>
-  )
+  const upcoming = useMemo(() => {
+    return subscriptions
+      .filter((subscription) => subscription.next_due)
+      .sort(
+        (a, b) =>
+          new Date(a.next_due!).getTime() - new Date(b.next_due!).getTime()
+      )
+      .slice(0, 5)
+  }, [subscriptions])
 
-  return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-semibold text-gray-900 mb-6">Dashboard</h1>
+  const totalBudgetLimit = useMemo(() => {
+    return budgets.reduce((sum, budget) => sum + budget.monthly_limit, 0)
+  }, [budgets])
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-        <div className="bg-white rounded-2xl border border-gray-100 p-5">
-          <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Monthly subscriptions</p>
-          <p className="text-2xl font-semibold">${monthlyBurn.toFixed(2)}</p>
-          <p className="text-xs text-gray-400 mt-1">${(monthlyBurn * 12).toFixed(0)}/year est.</p>
-        </div>
-        <div className="bg-white rounded-2xl border border-gray-100 p-5">
-          <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Spent this month</p>
-          <p className="text-2xl font-semibold">${totalExpenses.toFixed(2)}</p>
-          <p className="text-xs text-gray-400 mt-1">{monthlyExpenses.length} transactions</p>
-        </div>
-        <div className="bg-white rounded-2xl border border-gray-100 p-5">
-          <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Budgets active</p>
-          <p className="text-2xl font-semibold">{budgets.length}</p>
-          <p className="text-xs text-gray-400 mt-1">categories tracked</p>
+  const remainingBudget = Math.max(totalBudgetLimit - totalExpenses, 0)
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="space-y-8">
+          <div className="space-y-3">
+            <Skeleton className="h-8 w-40" />
+            <Skeleton className="h-4 w-72" />
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {[...Array(4)].map((_, index) => (
+              <Skeleton key={index} className="h-36 rounded-xl" />
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
+            <Skeleton className="h-[320px] rounded-xl xl:col-span-3" />
+            <Skeleton className="h-[320px] rounded-xl xl:col-span-2" />
+          </div>
         </div>
       </div>
+    )
+  }
 
-      <div className="bg-white rounded-2xl border border-gray-100 p-5 mb-6">
-        <h2 className="text-sm font-medium text-gray-700 mb-4">Upcoming bills</h2>
-        {upcoming.length === 0 ? (
-          <p className="text-gray-400 text-sm">No upcoming bills</p>
-        ) : (
-          <div className="divide-y divide-gray-50">
-            {upcoming.map(s => (
-              <div key={s.id} className="flex justify-between items-center py-3">
-                <div>
-                  <p className="text-sm font-medium text-gray-800">{s.name}</p>
-                  <p className="text-xs text-gray-400">{s.category}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-semibold">${s.amount.toFixed(2)}</p>
-                  <p className="text-xs text-gray-400">
-                    {s.next_due ? new Date(s.next_due).toLocaleDateString('en-AU') : ''}
+  return (
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <div className="space-y-8">
+        <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-primary">Overview</p>
+            <h1 className="text-3xl font-semibold tracking-tight text-foreground">
+              Financial dashboard
+            </h1>
+            <p className="max-w-2xl text-sm text-muted-foreground sm:text-base">
+              Track recurring bills, monthly spending, and budget health in one place.
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
+            <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
+              Current month
+            </p>
+            <p className="mt-1 text-sm font-medium text-foreground">
+              {currentMonth.toLocaleDateString('en-AU', {
+                month: 'long',
+                year: 'numeric',
+              })}
+            </p>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <CreditCard className="h-5 w-5" />
+              </div>
+              <span className="text-xs font-medium text-muted-foreground">
+                Recurring
+              </span>
+            </div>
+            <p className="text-sm text-muted-foreground">Monthly subscriptions</p>
+            <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
+              {formatCurrency(monthlyBurn)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {formatCurrency(monthlyBurn * 12)} estimated yearly spend
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Receipt className="h-5 w-5" />
+              </div>
+              <span className="text-xs font-medium text-muted-foreground">
+                This month
+              </span>
+            </div>
+            <p className="text-sm text-muted-foreground">Expense total</p>
+            <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
+              {formatCurrency(totalExpenses)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {monthlyExpenses.length} transaction{monthlyExpenses.length === 1 ? '' : 's'} logged
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Wallet className="h-5 w-5" />
+              </div>
+              <span className="text-xs font-medium text-muted-foreground">
+                Budget
+              </span>
+            </div>
+            <p className="text-sm text-muted-foreground">Remaining tracked budget</p>
+            <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
+              {formatCurrency(remainingBudget)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {budgets.length} active categor{budgets.length === 1 ? 'y' : 'ies'}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <CalendarDays className="h-5 w-5" />
+              </div>
+              <span className="text-xs font-medium text-muted-foreground">
+                Due soon
+              </span>
+            </div>
+            <p className="text-sm text-muted-foreground">Upcoming bills</p>
+            <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
+              {upcoming.length}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Next 5 recurring payments
+            </p>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 gap-6 xl:grid-cols-5">
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm xl:col-span-3">
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Upcoming bills</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Your nearest recurring charges and renewal dates.
+                </p>
+              </div>
+            </div>
+
+            {upcoming.length === 0 ? (
+              <div className="flex min-h-[220px] items-center justify-center rounded-xl border border-dashed border-border bg-muted/30">
+                <div className="text-center">
+                  <p className="text-sm font-medium text-foreground">No upcoming bills</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Add subscriptions to start tracking renewals.
                   </p>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+            ) : (
+              <div className="space-y-3">
+                {upcoming.map((subscription) => {
+                  const daysUntil = getDaysUntil(subscription.next_due)
 
-      <div className="bg-white rounded-2xl border border-gray-100 p-5">
-        <h2 className="text-sm font-medium text-gray-700 mb-4">Budget overview</h2>
-        {budgets.length === 0 ? (
-          <p className="text-gray-400 text-sm">No budgets set yet</p>
-        ) : (
-          <div className="space-y-3">
-            {budgets.map(b => {
-              const spent = monthlyExpenses
-                .filter(e => e.category === b.category)
-                .reduce((sum, e) => sum + e.amount, 0)
-              const pct = Math.min((spent / b.monthly_limit) * 100, 100)
-              return (
-                <div key={b.id}>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-gray-700 capitalize">{b.category}</span>
-                    <span className="text-gray-500">${spent.toFixed(2)} / ${b.monthly_limit.toFixed(2)}</span>
-                  </div>
-                  <div className="w-full bg-gray-100 rounded-full h-1.5">
+                  return (
                     <div
-                      className={`h-1.5 rounded-full ${pct >= 100 ? 'bg-red-400' : pct >= 80 ? 'bg-yellow-400' : 'bg-green-400'}`}
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                </div>
-              )
-            })}
+                      key={subscription.id}
+                      className="flex flex-col gap-4 rounded-xl border border-border bg-background/60 p-4 transition-colors hover:bg-muted/40 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-sm font-semibold text-primary">
+                            {subscription.name.slice(0, 1).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-foreground">
+                              {subscription.name}
+                            </p>
+                            <p className="text-xs capitalize text-muted-foreground">
+                              {subscription.category} · {subscription.cycle}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-4 sm:justify-end">
+                        <div className="text-left sm:text-right">
+                          <p className="text-sm font-semibold text-foreground">
+                            {formatCurrency(subscription.amount)}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Due {formatDate(subscription.next_due)}
+                          </p>
+                        </div>
+
+                        <div className="rounded-full border border-border bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">
+                          {daysUntil === null
+                            ? 'No date'
+                            : daysUntil < 0
+                              ? 'Overdue'
+                              : daysUntil === 0
+                                ? 'Due today'
+                                : `${daysUntil}d left`}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
-        )}
+
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm xl:col-span-2">
+            <div className="mb-5">
+              <h2 className="text-lg font-semibold text-foreground">Budget overview</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                See which categories are healthy and which need attention.
+              </p>
+            </div>
+
+            {budgets.length === 0 ? (
+              <div className="flex min-h-[220px] items-center justify-center rounded-xl border border-dashed border-border bg-muted/30">
+                <div className="text-center">
+                  <p className="text-sm font-medium text-foreground">No budgets set</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Add category budgets to monitor monthly limits.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {budgets.map((budget) => {
+                  const spent = monthlyExpenses
+                    .filter((expense) => expense.category === budget.category)
+                    .reduce((sum, expense) => sum + expense.amount, 0)
+
+                  const percent = budget.monthly_limit > 0
+                    ? (spent / budget.monthly_limit) * 100
+                    : 0
+
+                  const clampedPercent = Math.min(percent, 100)
+                  const tone = getBudgetTone(percent)
+
+                  return (
+                    <div
+                      key={budget.id}
+                      className="rounded-xl border border-border bg-background/60 p-4"
+                    >
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold capitalize text-foreground">
+                            {budget.category}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {formatCurrency(spent)} of {formatCurrency(budget.monthly_limit)}
+                          </p>
+                        </div>
+
+                        <span
+                          className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${tone.badge}`}
+                        >
+                          {tone.label}
+                        </span>
+                      </div>
+
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={`h-full rounded-full transition-all ${tone.bar}`}
+                          style={{ width: `${clampedPercent}%` }}
+                        />
+                      </div>
+
+                      <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                        <span>{Math.round(percent)}%</span>
+                        <span>
+                          {budget.monthly_limit - spent > 0
+                            ? `${formatCurrency(budget.monthly_limit - spent)} left`
+                            : `${formatCurrency(spent - budget.monthly_limit)} over`}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   )
