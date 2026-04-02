@@ -25,10 +25,12 @@ class SubscriptionUpdate(BaseModel):
     category: Optional[Category] = None
     amount: Optional[float] = None
     currency: Optional[str] = None
+    exchange_rate: Optional[float] = None
+    converted_amount: Optional[float] = None
     cycle: Optional[BillingCycle] = None
     next_due: Optional[datetime] = None
     is_active: Optional[bool] = None
-
+    
 @router.get("/")
 def get_subscriptions(
     user_id: str = Depends(verify_token),

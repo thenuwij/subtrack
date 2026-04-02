@@ -29,38 +29,58 @@ interface Props {
   open: boolean
   onClose: () => void
   onSubmit: (data: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) => Promise<void>
+  initialData?: Subscription  // when provided = edit mode
 }
 
-export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
+export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: Props) {
   const { baseCurrency } = useCurrency()
+  const isEditing = !!initialData  // true if editing, false if adding
 
   const DEFAULT_FORM: FormState = {
     name: '',
     category: 'other',
     amount: '',
-    currency: baseCurrency,  // default to user's base currency
+    currency: baseCurrency,
     cycle: 'monthly',
     next_due: '',
     is_active: true,
   }
 
-  const [form, setForm] = useState<FormState>(DEFAULT_FORM)
+  // When initialData changes (modal opens for edit), pre-fill the form
+  function getInitialForm(): FormState {
+    if (!initialData) return DEFAULT_FORM
+    return {
+      name: initialData.name,
+      category: initialData.category,
+      amount: initialData.amount.toString(),
+      currency: initialData.currency as Currency,
+      cycle: initialData.cycle,
+      next_due: initialData.next_due
+        ? new Date(initialData.next_due).toISOString().split('T')[0]
+        : '',
+      is_active: initialData.is_active,
+    }
+  }
+
+  const [form, setForm] = useState<FormState>(getInitialForm)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  // Exchange rate state
-  const [exchangeRate, setExchangeRate] = useState<number>(1.0)
+  const [exchangeRate, setExchangeRate] = useState<number>(initialData?.exchange_rate ?? 1.0)
   const [rateLoading, setRateLoading] = useState(false)
   const [rateError, setRateError] = useState<string | null>(null)
 
-  // Fetch rate whenever currency changes and it differs from base currency
-  // This useEffect runs every time form.currency or baseCurrency changes
+  // Re-fill form when initialData changes — handles opening different items
+  useEffect(() => {
+    setForm(getInitialForm())
+    setExchangeRate(initialData?.exchange_rate ?? 1.0)
+    setError(null)
+  }, [initialData])
+
   useEffect(() => {
     if (form.currency === baseCurrency) {
-      setExchangeRate(1.0)  // same currency, no conversion needed
+      setExchangeRate(1.0)
       return
     }
-
     async function fetchRate() {
       setRateLoading(true)
       setRateError(null)
@@ -68,20 +88,9 @@ export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
         const supabase = createClient()
         const { data: { session } } = await supabase.auth.getSession()
         if (!session) return
-
-        // GET /rates?base=AUD returns { rates: { USD: 0.63, ... } }
-        // We need the inverse: how many AUD per 1 USD
-        // If 1 AUD = 0.63 USD, then 1 USD = 1/0.63 = 1.587 AUD
         const data = await getRates(session.access_token, baseCurrency)
         const rate = data.rates[form.currency]
-
-        if (!rate) {
-          setRateError('Rate unavailable for this currency')
-          return
-        }
-
-        // Invert: getRates gives "how much foreign per 1 base"
-        // We want "how much base per 1 foreign"
+        if (!rate) { setRateError('Rate unavailable'); return }
         setExchangeRate(parseFloat((1 / rate).toFixed(6)))
       } catch {
         setRateError('Could not fetch exchange rate')
@@ -89,11 +98,9 @@ export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
         setRateLoading(false)
       }
     }
-
     fetchRate()
   }, [form.currency, baseCurrency])
 
-  // Derived: converted amount shown as preview
   const amount = parseFloat(form.amount)
   const convertedAmount = !isNaN(amount) && amount > 0
     ? parseFloat((amount * exchangeRate).toFixed(2))
@@ -140,17 +147,15 @@ export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
     onClose()
   }
 
-  const isForeignCurrency = form.currency !== baseCurrency
-
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Add subscription</DialogTitle>
+          {/* Title changes based on mode */}
+          <DialogTitle>{isEditing ? 'Edit subscription' : 'Add subscription'}</DialogTitle>
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
-
           <div className="grid gap-1.5">
             <Label htmlFor="sub-name">Name</Label>
             <Input id="sub-name" placeholder="Netflix, GitHub Pro…" value={form.name} onChange={e => set('name', e.target.value)} disabled={loading} />
@@ -166,7 +171,6 @@ export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
             </Select>
           </div>
 
-          {/* Amount + Currency — side by side */}
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
               <Label htmlFor="sub-amount">Amount</Label>
@@ -174,7 +178,6 @@ export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
             </div>
             <div className="grid gap-1.5">
               <Label>Currency</Label>
-              {/* Dropdown instead of free text — only supported currencies */}
               <Select value={form.currency} onValueChange={v => set('currency', v as Currency)} disabled={loading}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -184,19 +187,14 @@ export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
             </div>
           </div>
 
-          {/* Rate preview — only shown when foreign currency selected */}
-          {isForeignCurrency && (
+          {form.currency !== baseCurrency && (
             <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
               {rateLoading && 'Fetching rate…'}
               {rateError && <span className="text-destructive">{rateError}</span>}
               {!rateLoading && !rateError && (
                 <span>
                   1 {form.currency} = {exchangeRate.toFixed(4)} {baseCurrency}
-                  {convertedAmount && (
-                    <span className="ml-2 font-medium text-foreground">
-                      ≈ {baseCurrency} {convertedAmount.toFixed(2)}
-                    </span>
-                  )}
+                  {convertedAmount && <span className="ml-2 font-medium text-foreground">≈ {baseCurrency} {convertedAmount.toFixed(2)}</span>}
                 </span>
               )}
             </div>
@@ -223,7 +221,7 @@ export function AddSubscriptionModal({ open, onClose, onSubmit }: Props) {
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={handleClose} disabled={loading}>Cancel</Button>
           <Button onClick={handleSubmit} disabled={loading || rateLoading}>
-            {loading ? 'Adding…' : 'Add subscription'}
+            {loading ? (isEditing ? 'Saving…' : 'Adding…') : (isEditing ? 'Save changes' : 'Add subscription')}
           </Button>
         </DialogFooter>
       </DialogContent>

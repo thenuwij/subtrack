@@ -5,7 +5,7 @@ import { Expense } from '@/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Trash2 } from 'lucide-react'
+import { Trash2, Pencil} from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
 
 const CATEGORY_STYLES: Record<string, string> = {
@@ -22,9 +22,10 @@ const CATEGORY_STYLES: Record<string, string> = {
 interface Props {
   expense: Expense
   onDelete: (id: string) => Promise<void>
+  onEdit: (expense: Expense) => void
 }
 
-export function ExpenseCard({ expense, onDelete }: Props) {
+export function ExpenseCard({ expense, onDelete, onEdit }: Props) {
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting]     = useState(false)
   const { baseCurrency } = useCurrency()
@@ -76,36 +77,34 @@ export function ExpenseCard({ expense, onDelete }: Props) {
             <p className="text-xs text-muted-foreground mt-0.5">
               {new Date(expense.date).toLocaleDateString('en-AU')}
             </p>
-            <div className="flex justify-end mt-2 h-7">
+            <div className="flex justify-end mt-2 h-7 gap-1">
               {!confirming ? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity
-                             text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                  onClick={() => setConfirming(true)}
-                  aria-label="Delete expense"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
-              ) : (
-                <div className="flex items-center gap-1">
+                <>
                   <Button
-                    variant="destructive"
-                    size="sm"
-                    className="h-7 text-xs px-2"
-                    onClick={handleDelete}
-                    disabled={deleting}
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground hover:bg-muted"
+                    onClick={() => onEdit(expense)}
+                    aria-label="Edit expense"
                   >
-                    {deleting ? 'Deleting…' : 'Delete'}
+                    <Pencil className="w-3.5 h-3.5" />
                   </Button>
                   <Button
                     variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs px-2"
-                    onClick={() => setConfirming(false)}
-                    disabled={deleting}
+                    size="icon"
+                    className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    onClick={() => setConfirming(true)}
+                    aria-label="Delete expense"
                   >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <Button variant="destructive" size="sm" className="h-7 text-xs px-2" onClick={handleDelete} disabled={deleting}>
+                    {deleting ? 'Deleting…' : 'Delete'}
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={() => setConfirming(false)} disabled={deleting}>
                     Cancel
                   </Button>
                 </div>

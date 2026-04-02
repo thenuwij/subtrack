@@ -28,26 +28,40 @@ interface Props {
   open: boolean
   onClose: () => void
   onSubmit: (data: Omit<Expense, 'id' | 'user_id' | 'created_at'>) => Promise<void>
+  initialData?: Expense
 }
 
-export function AddExpenseModal({ open, onClose, onSubmit }: Props) {
+export function AddExpenseModal({ open, onClose, onSubmit, initialData }: Props) {
   const { baseCurrency } = useCurrency()
+  const isEditing = !!initialData
 
-  const DEFAULT_FORM: FormState = {
-    name: '',
-    category: 'other',
-    amount: '',
-    currency: baseCurrency,
-    date: today,
-    note: '',
+  function getInitialForm(): FormState {
+    if (!initialData) return {
+      name: '', category: 'other', amount: '', currency: baseCurrency, date: today, note: '',
+    }
+    return {
+      name: initialData.name,
+      category: initialData.category,
+      amount: initialData.amount.toString(),
+      currency: initialData.currency as Currency,
+      date: new Date(initialData.date).toISOString().split('T')[0],
+      note: initialData.note ?? '',
+    }
   }
 
-  const [form, setForm] = useState<FormState>(DEFAULT_FORM)
+  const [form, setForm] = useState<FormState>(getInitialForm)
+
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [exchangeRate, setExchangeRate] = useState<number>(1.0)
   const [rateLoading, setRateLoading] = useState(false)
   const [rateError, setRateError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setForm(getInitialForm())
+    setExchangeRate(initialData?.exchange_rate ?? 1.0)
+    setError(null)
+  }, [initialData])
 
   useEffect(() => {
     if (form.currency === baseCurrency) {
@@ -104,7 +118,7 @@ export function AddExpenseModal({ open, onClose, onSubmit }: Props) {
         date: new Date(form.date).toISOString(),
         note: form.note.trim() || null,
       })
-      setForm(DEFAULT_FORM)
+      setForm(getInitialForm)
       onClose()
     } catch (e: any) {
       setError(e?.message ?? 'Something went wrong.')
@@ -115,7 +129,7 @@ export function AddExpenseModal({ open, onClose, onSubmit }: Props) {
 
   function handleClose() {
     if (loading) return
-    setForm(DEFAULT_FORM)
+    setForm(getInitialForm)
     setError(null)
     onClose()
   }
@@ -124,7 +138,7 @@ export function AddExpenseModal({ open, onClose, onSubmit }: Props) {
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Log expense</DialogTitle>
+          <DialogTitle>{isEditing ? 'Edit expense' : 'Log expense'}</DialogTitle>
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
@@ -188,7 +202,7 @@ export function AddExpenseModal({ open, onClose, onSubmit }: Props) {
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={handleClose} disabled={loading}>Cancel</Button>
           <Button onClick={handleSubmit} disabled={loading || rateLoading}>
-            {loading ? 'Saving…' : 'Log expense'}
+            {loading ? (isEditing ? 'Saving…' : 'Saving…') : (isEditing ? 'Save changes' : 'Log expense')}
           </Button>
         </DialogFooter>
       </DialogContent>

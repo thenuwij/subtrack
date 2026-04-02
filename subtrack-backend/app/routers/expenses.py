@@ -25,6 +25,8 @@ class ExpenseUpdate(BaseModel):
     category: Optional[Category] = None
     amount: Optional[float] = None
     currency: Optional[str] = None
+    exchange_rate: Optional[float] = None
+    converted_amount: Optional[float] = None
     date: Optional[datetime] = None
     note: Optional[str] = None
 

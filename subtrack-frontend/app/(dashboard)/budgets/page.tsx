@@ -62,7 +62,7 @@ export default function BudgetsPage() {
   function spentForCategory(category: string) {
     return monthlyExpenses
       .filter(e => e.category === category)
-      .reduce((sum, e) => sum + e.amount, 0)
+      .reduce((sum, e) => sum + (e.converted_amount ?? e.amount), 0)
   }
 
   const existingCategories = budgets.map(b => b.category as Category)

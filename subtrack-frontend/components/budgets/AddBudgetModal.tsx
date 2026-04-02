@@ -14,21 +14,20 @@ import {
   SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 
+import { useCurrency } from '@/lib/context/currency'
+import { Currency } from '@/types'
+
 const CATEGORIES: Category[] = [
   'streaming', 'software', 'cloud', 'utilities',
   'fitness', 'food', 'transport', 'other',
 ]
 
+const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
+
 interface FormState {
   category:      Category
   monthly_limit: string
   currency:      string
-}
-
-const DEFAULT_FORM: FormState = {
-  category:      'other',
-  monthly_limit: '',
-  currency:      'AUD',
 }
 
 interface Props {
@@ -39,6 +38,14 @@ interface Props {
 }
 
 export function AddBudgetModal({ open, onClose, existingCategories, onSubmit }: Props) {
+  const { baseCurrency } = useCurrency()
+
+  const DEFAULT_FORM: FormState = {
+    category: 'other',
+    monthly_limit: '',
+    currency: baseCurrency,  
+  }
+
   const [form, setForm]       = useState<FormState>(DEFAULT_FORM)
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState<string | null>(null)
@@ -119,15 +126,13 @@ export function AddBudgetModal({ open, onClose, existingCategories, onSubmit }: 
               />
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="budget-currency">Currency</Label>
-              <Input
-                id="budget-currency"
-                placeholder="AUD"
-                maxLength={3}
-                value={form.currency}
-                onChange={e => set('currency', e.target.value.toUpperCase())}
-                disabled={loading}
-              />
+              <Label>Currency</Label>
+              <Select value={form.currency} onValueChange={v => set('currency', v)} disabled={loading}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {CURRENCIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 

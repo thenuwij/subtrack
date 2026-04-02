@@ -118,3 +118,23 @@ export async function updatePreferences(token: string, base_currency: string) {
   if (!res.ok) throw new Error('Failed to update preferences')
   return res.json()
 }
+
+export async function updateSubscription(token: string, id: string, data: any) {
+  const res = await fetch(`${API_URL}/subscriptions/${id}`, {
+    method: 'PATCH',
+    headers: await getHeaders(token),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Failed to update subscription')
+  return res.json()
+}
+
+export async function updateExpense(token: string, id: string, data: any) {
+  const res = await fetch(`${API_URL}/expenses/${id}`, {
+    method: 'PATCH',
+    headers: await getHeaders(token),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Failed to update expense')
+  return res.json()
+}

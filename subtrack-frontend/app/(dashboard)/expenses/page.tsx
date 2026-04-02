@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { getExpenses, createExpense, deleteExpense } from '@/lib/api'
+import { getExpenses, createExpense, deleteExpense, updateExpense } from '@/lib/api'
 import { Expense } from '@/types'
 import { ExpenseCard }       from '@/components/expenses/ExpenseCard'
 import { AddExpenseModal }   from '@/components/expenses/AddExpenseModal'
@@ -19,6 +19,7 @@ export default function ExpensesPage() {
   const [error, setError]         = useState<string | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const { baseCurrency } = useCurrency()
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
 
   async function fetchExpenses() {
     const { data: { session } } = await supabase.auth.getSession()
@@ -47,6 +48,14 @@ export default function ExpensesPage() {
     if (!session) throw new Error('Not authenticated')
     await deleteExpense(session.access_token, id)
     setExpenses(prev => prev.filter(e => e.id !== id))
+  }
+
+  async function handleEdit(formData: Omit<Expense, 'id' | 'user_id' | 'created_at'>) {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session || !editingExpense) throw new Error('Not authenticated')
+    const updated = await updateExpense(session.access_token, editingExpense.id, formData)
+    setExpenses(prev => prev.map(e => e.id === editingExpense.id ? updated : e))
+    setEditingExpense(null)
   }
 
   const thisMonth = new Date()
@@ -118,6 +127,7 @@ export default function ExpensesPage() {
               key={exp.id}
               expense={exp}
               onDelete={handleDelete}
+              onEdit={setEditingExpense}
             />
           ))}
         </div>
@@ -128,6 +138,13 @@ export default function ExpensesPage() {
         onClose={() => setModalOpen(false)}
         onSubmit={handleAdd}
       />
+      <AddExpenseModal
+        open={!!editingExpense}
+        onClose={() => setEditingExpense(null)}
+        onSubmit={handleEdit}
+        initialData={editingExpense ?? undefined}
+      />
+      
     </div>
   )
 }

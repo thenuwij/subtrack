@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { getSubscriptions, createSubscription, deleteSubscription } from '@/lib/api'
+import { getSubscriptions, createSubscription, deleteSubscription, updateSubscription } from '@/lib/api'
 import { Subscription } from '@/types'
 import { SubscriptionCard }       from '@/components/subscriptions/SubscriptionCard'
 import { AddSubscriptionModal }   from '@/components/subscriptions/AddSubscriptionModal'
@@ -68,6 +68,18 @@ export default function SubscriptionsPage() {
     await deleteSubscription(session.access_token, id)
     setSubscriptions(prev => prev.filter(s => s.id !== id))
   }
+
+  // ── update ─────────────────────────────────────────────────────────────────
+  const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null)
+
+  async function handleEdit(formData: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session || !editingSubscription) throw new Error('Not authenticated')
+    const updated = await updateSubscription(session.access_token, editingSubscription.id, formData)
+    setSubscriptions(prev => prev.map(s => s.id === editingSubscription.id ? updated : s))
+    setEditingSubscription(null)
+  }
+
 
   // ── derived stats ──────────────────────────────────────────────────────────
 
@@ -142,16 +154,25 @@ export default function SubscriptionsPage() {
               key={sub.id}
               subscription={sub}
               onDelete={handleDelete}
+              onEdit={setEditingSubscription}
             />
           ))}
         </div>
       )}
 
-      {/* Modal */}
+      {/* Add Modal */}
       <AddSubscriptionModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         onSubmit={handleAdd}
+      />
+
+      {/* Edit Modal */}
+      <AddSubscriptionModal
+        open={!!editingSubscription}
+        onClose={() => setEditingSubscription(null)}
+        onSubmit={handleEdit}
+        initialData={editingSubscription ?? undefined}
       />
 
     </div>
