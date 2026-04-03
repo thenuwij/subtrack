@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/rates", tags=["rates"])
 
 SUPPORTED_CURRENCIES = {"AUD", "USD", "GBP", "SGD", "EUR", "JPY"}
-FRANKFURTER_URL = "https://api.frankfurter.app/latest"
+FRANKFURTER_URL = "https://api.frankfurter.dev/v1/latest"
 
 # In-memory cache — stores rates per base currency
 # Structure: { "AUD": { "rates": {...}, "fetched_at": datetime } }
