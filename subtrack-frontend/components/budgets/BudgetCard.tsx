@@ -21,7 +21,7 @@ export function BudgetCard({ budget, spent, onDelete }: Props) {
   const pct     = Math.min((spent / budget.monthly_limit) * 100, 100)
   const overBudget = spent > budget.monthly_limit
 
-  const barColor = overBudget ? 'bg-destructive' : pct >= 80 ? 'bg-amber-500' : 'bg-primary'
+  const barColor = overBudget ? 'bg-destructive' : pct >= 80 ? 'bg-warning' : 'bg-primary'
 
   async function handleDelete() {
     setDeleting(true)
@@ -34,7 +34,7 @@ export function BudgetCard({ budget, spent, onDelete }: Props) {
   }
 
   return (
-    <Card className="group">
+    <Card className="group border-0 shadow-[var(--shadow-sm)] hover:shadow-[var(--shadow-md)] transition-shadow duration-200">
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-3 mb-3">
           <div>

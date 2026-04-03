@@ -9,6 +9,7 @@ import { AddBudgetModal }   from '@/components/budgets/AddBudgetModal'
 import { Button }           from '@/components/ui/button'
 import { Skeleton }         from '@/components/ui/skeleton'
 import { Plus, PieChart }   from 'lucide-react'
+import { toast } from 'sonner'
 
 export default function BudgetsPage() {
   const supabase = createClient()
@@ -31,6 +32,7 @@ export default function BudgetsPage() {
       setExpenses(exps)
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load budgets.')
+      toast.error('Something went wrong')
     } finally {
       setLoading(false)
     }
@@ -43,6 +45,7 @@ export default function BudgetsPage() {
     if (!session) throw new Error('Not authenticated')
     const created = await createBudget(session.access_token, formData)
     setBudgets(prev => [...prev, created])
+    toast.success('Budget saved')
   }
 
   async function handleDelete(id: string) {
@@ -50,6 +53,7 @@ export default function BudgetsPage() {
     if (!session) throw new Error('Not authenticated')
     await deleteBudget(session.access_token, id)
     setBudgets(prev => prev.filter(b => b.id !== id))
+    toast.success('Budget deleted')
   }
 
   const thisMonth = new Date()

@@ -9,14 +9,14 @@ import { Trash2, Calendar, Pencil } from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
 
 const CATEGORY_STYLES: Record<string, string> = {
-  streaming:  'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
-  software:   'bg-blue-100   text-blue-700   dark:bg-blue-900/30   dark:text-blue-300',
-  cloud:      'bg-sky-100    text-sky-700    dark:bg-sky-900/30    dark:text-sky-300',
-  utilities:  'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300',
-  fitness:    'bg-green-100  text-green-700  dark:bg-green-900/30  dark:text-green-300',
-  food:       'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300',
-  transport:  'bg-red-100    text-red-700    dark:bg-red-900/30    dark:text-red-300',
-  other:      'bg-gray-100   text-gray-600   dark:bg-gray-800      dark:text-gray-400',
+  streaming:  'bg-purple-500/10 text-purple-600 dark:text-purple-400',
+  software:   'bg-blue-500/10   text-blue-600   dark:text-blue-400',
+  cloud:      'bg-sky-500/10    text-sky-600    dark:text-sky-400',
+  utilities:  'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400',
+  fitness:    'bg-green-500/10  text-green-600  dark:text-green-400',
+  food:       'bg-orange-500/10 text-orange-600 dark:text-orange-400',
+  transport:  'bg-red-500/10    text-red-600    dark:text-red-400',
+  other:      'bg-muted text-muted-foreground',
 }
 
 const CYCLE_LABEL: Record<string, string> = {
@@ -71,7 +71,7 @@ export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
   }
 
   return (
-    <Card className="group">
+    <Card className="group border-0 shadow-[var(--shadow-sm)] hover:shadow-[var(--shadow-md)] transition-shadow duration-200">
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-3">
 
@@ -88,7 +88,7 @@ export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
             <div className="flex items-center gap-2 flex-wrap">
               <Badge
                 variant="secondary"
-                className={`text-xs font-normal border-0 ${CATEGORY_STYLES[subscription.category]}`}
+                className={`text-xs font-medium border-0 rounded-full px-2.5 ${CATEGORY_STYLES[subscription.category]}`}
               >
                 {subscription.category}
               </Badge>

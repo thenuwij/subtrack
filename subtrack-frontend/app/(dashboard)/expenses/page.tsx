@@ -10,6 +10,7 @@ import { Button }            from '@/components/ui/button'
 import { Skeleton }          from '@/components/ui/skeleton'
 import { Plus, Receipt }     from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
+import { toast } from 'sonner'
 
 export default function ExpensesPage() {
   const supabase = createClient()
@@ -29,6 +30,7 @@ export default function ExpensesPage() {
       setExpenses(data)
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load expenses.')
+      toast.error('Something went wrong')
     } finally {
       setLoading(false)
     }
@@ -41,6 +43,7 @@ export default function ExpensesPage() {
     if (!session) throw new Error('Not authenticated')
     const created = await createExpense(session.access_token, formData)
     setExpenses(prev => [created, ...prev])
+    toast.success('Expense logged')
   }
 
   async function handleDelete(id: string) {
@@ -48,6 +51,7 @@ export default function ExpensesPage() {
     if (!session) throw new Error('Not authenticated')
     await deleteExpense(session.access_token, id)
     setExpenses(prev => prev.filter(e => e.id !== id))
+    toast.success('Expense deleted')
   }
 
   async function handleEdit(formData: Omit<Expense, 'id' | 'user_id' | 'created_at'>) {
@@ -56,6 +60,7 @@ export default function ExpensesPage() {
     const updated = await updateExpense(session.access_token, editingExpense.id, formData)
     setExpenses(prev => prev.map(e => e.id === editingExpense.id ? updated : e))
     setEditingExpense(null)
+    toast.success('Expense updated')
   }
 
   const thisMonth = new Date()

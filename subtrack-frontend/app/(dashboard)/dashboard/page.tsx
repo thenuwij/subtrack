@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, CreditCard, Receipt, Wallet } from 'lucide-react'
+import { CreditCard, Receipt } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { getSubscriptions, getExpenses, getBudgets } from '@/lib/api'
 import type { Subscription, Expense, Budget } from '@/types'
@@ -153,15 +153,15 @@ export default function DashboardPage() {
             <Skeleton className="h-4 w-72" />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {[...Array(4)].map((_, index) => (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {[...Array(2)].map((_, index) => (
               <Skeleton key={index} className="h-36 rounded-xl" />
             ))}
           </div>
 
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
-            <Skeleton className="h-[320px] rounded-xl xl:col-span-3" />
-            <Skeleton className="h-[320px] rounded-xl xl:col-span-2" />
+          <div className="space-y-6">
+            <Skeleton className="h-[320px] rounded-xl" />
+            <Skeleton className="h-[320px] rounded-xl" />
           </div>
         </div>
       </div>
@@ -182,7 +182,7 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          <div className="rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
+          <div className="rounded-xl bg-card px-4 py-3 shadow-md">
             <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
               Current month
             </p>
@@ -195,89 +195,47 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="rounded-xl bg-card p-5 shadow-md">
             <div className="mb-4 flex items-center justify-between">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <CreditCard className="h-5 w-5" />
               </div>
-              <span className="text-xs font-medium text-muted-foreground">
-                Recurring
-              </span>
+              <span className="text-xs font-medium text-muted-foreground">Recurring</span>
             </div>
-            <p className="text-sm text-muted-foreground">Monthly subscriptions</p>
-            <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
+            <p className="text-sm font-medium text-foreground">Monthly subscriptions</p>
+            <p className="mt-2 text-3xl font-bold tracking-tight tabular-nums text-foreground">
               {formatCurrency(monthlyBurn, baseCurrency)}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {formatCurrency(monthlyBurn * 12,  baseCurrency)} estimated yearly spend
+              {formatCurrency(monthlyBurn * 12, baseCurrency)} estimated yearly spend
             </p>
           </div>
 
-          <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+          <div className="rounded-xl bg-card p-5 shadow-md">
             <div className="mb-4 flex items-center justify-between">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <Receipt className="h-5 w-5" />
               </div>
-              <span className="text-xs font-medium text-muted-foreground">
-                This month
-              </span>
+              <span className="text-xs font-medium text-muted-foreground">This month</span>
             </div>
-            <p className="text-sm text-muted-foreground">Expense total</p>
-            <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
-              {formatCurrency(totalExpenses,  baseCurrency)}
+            <p className="text-sm font-medium text-foreground">Expense total</p>
+            <p className="mt-2 text-3xl font-bold tracking-tight tabular-nums text-foreground">
+              {formatCurrency(totalExpenses, baseCurrency)}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
               {monthlyExpenses.length} transaction{monthlyExpenses.length === 1 ? '' : 's'} logged
             </p>
           </div>
-
-          <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                <Wallet className="h-5 w-5" />
-              </div>
-              <span className="text-xs font-medium text-muted-foreground">
-                Budget
-              </span>
-            </div>
-            <p className="text-sm text-muted-foreground">Remaining tracked budget</p>
-            <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
-              {formatCurrency(remainingBudget,  baseCurrency)}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {budgets.length} active categor{budgets.length === 1 ? 'y' : 'ies'}
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                <CalendarDays className="h-5 w-5" />
-              </div>
-              <span className="text-xs font-medium text-muted-foreground">
-                Due soon
-              </span>
-            </div>
-            <p className="text-sm text-muted-foreground">Upcoming bills</p>
-            <p className="mt-2 text-2xl font-semibold tracking-tight text-foreground">
-              {upcoming.length}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Next 5 recurring payments
-            </p>
-          </div>
         </section>
 
-        <section className="grid grid-cols-1 gap-6 xl:grid-cols-5">
-          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm xl:col-span-3">
-            <div className="mb-5 flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-foreground">Upcoming bills</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Your nearest recurring charges and renewal dates.
-                </p>
-              </div>
+        <section className="space-y-6">
+          <div className="rounded-2xl bg-card p-6 shadow-md">
+            <div className="mb-5">
+              <h2 className="text-lg font-semibold text-foreground">Upcoming bills</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Your nearest recurring charges and renewal dates.
+              </p>
             </div>
 
             {upcoming.length === 0 ? (
@@ -342,12 +300,24 @@ export default function DashboardPage() {
             )}
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-6 shadow-sm xl:col-span-2">
-            <div className="mb-5">
-              <h2 className="text-lg font-semibold text-foreground">Budget overview</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                See which categories are healthy and which need attention.
-              </p>
+          <div className="rounded-2xl bg-card p-6 shadow-md">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Budget overview</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  See which categories are healthy and which need attention.
+                </p>
+              </div>
+              {budgets.length > 0 && (
+                <div className="shrink-0 text-right">
+                  <p className="text-sm font-semibold text-foreground">
+                    {formatCurrency(remainingBudget, baseCurrency)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {budgets.length} categor{budgets.length === 1 ? 'y' : 'ies'} · remaining
+                  </p>
+                </div>
+              )}
             </div>
 
             {budgets.length === 0 ? (

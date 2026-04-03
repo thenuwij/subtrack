@@ -1,5 +1,7 @@
 import Navbar from '@/components/layout/Navbar'
 import { CurrencyProvider } from '@/lib/context/currency'
+import { Toaster } from '@/components/ui/sonner'
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <CurrencyProvider>
@@ -9,6 +11,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {children}
         </main>
       </div>
+      <Toaster />
     </CurrencyProvider>
   )
 }

@@ -10,6 +10,7 @@ import { Button }                 from '@/components/ui/button'
 import { Skeleton }               from '@/components/ui/skeleton'
 import { Plus, CreditCard }       from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
+import { toast } from 'sonner'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ export default function SubscriptionsPage() {
       setSubscriptions(data)
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load subscriptions.')
+      toast.error('Something went wrong')
     } finally {
       setLoading(false)
     }
@@ -57,6 +59,19 @@ export default function SubscriptionsPage() {
 
     const created = await createSubscription(session.access_token, formData)
     setSubscriptions(prev => [created, ...prev])
+    toast.success('Subscription added')
+  }
+    
+  // ── update ─────────────────────────────────────────────────────────────────
+  const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null)
+
+  async function handleEdit(formData: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session || !editingSubscription) throw new Error('Not authenticated')
+    const updated = await updateSubscription(session.access_token, editingSubscription.id, formData)
+    setSubscriptions(prev => prev.map(s => s.id === editingSubscription.id ? updated : s))
+    setEditingSubscription(null)
+    toast.success('Subscription updated')
   }
 
   // ── delete ─────────────────────────────────────────────────────────────────
@@ -67,19 +82,8 @@ export default function SubscriptionsPage() {
 
     await deleteSubscription(session.access_token, id)
     setSubscriptions(prev => prev.filter(s => s.id !== id))
+    toast.success('Subscription deleted')
   }
-
-  // ── update ─────────────────────────────────────────────────────────────────
-  const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null)
-
-  async function handleEdit(formData: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) {
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session || !editingSubscription) throw new Error('Not authenticated')
-    const updated = await updateSubscription(session.access_token, editingSubscription.id, formData)
-    setSubscriptions(prev => prev.map(s => s.id === editingSubscription.id ? updated : s))
-    setEditingSubscription(null)
-  }
-
 
   // ── derived stats ──────────────────────────────────────────────────────────
 
