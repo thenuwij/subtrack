@@ -138,3 +138,79 @@ export async function updateExpense(token: string, id: string, data: any) {
   if (!res.ok) throw new Error('Failed to update expense')
   return res.json()
 }
+
+// Income
+export async function getIncome(token: string) {
+  const res = await fetch(`${API_URL}/income/`, {
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to fetch income')
+  return res.json()
+}
+
+export async function createIncome(token: string, data: any) {
+  const res = await fetch(`${API_URL}/income/`, {
+    method: 'POST',
+    headers: await getHeaders(token),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Failed to create income')
+  return res.json()
+}
+
+export async function updateIncome(token: string, id: string, data: any) {
+  const res = await fetch(`${API_URL}/income/${id}`, {
+    method: 'PATCH',
+    headers: await getHeaders(token),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Failed to update income')
+  return res.json()
+}
+
+export async function deleteIncome(token: string, id: string) {
+  const res = await fetch(`${API_URL}/income/${id}`, {
+    method: 'DELETE',
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to delete income')
+  return res.json()
+}
+
+// Savings Goals
+export async function getSavingsGoals(token: string) {
+  const res = await fetch(`${API_URL}/savings/`, {
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to fetch savings goals')
+  return res.json()
+}
+
+export async function createSavingsGoal(token: string, data: any) {
+  const res = await fetch(`${API_URL}/savings/`, {
+    method: 'POST',
+    headers: await getHeaders(token),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Failed to create savings goal')
+  return res.json()
+}
+
+export async function updateSavingsGoal(token: string, id: string, data: any) {
+  const res = await fetch(`${API_URL}/savings/${id}`, {
+    method: 'PATCH',
+    headers: await getHeaders(token),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Failed to update savings goal')
+  return res.json()
+}
+
+export async function deleteSavingsGoal(token: string, id: string) {
+  const res = await fetch(`${API_URL}/savings/${id}`, {
+    method: 'DELETE',
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to delete savings goal')
+  return res.json()
+}

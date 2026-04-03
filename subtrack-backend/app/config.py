@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     supabase_jwt_secret: str
     allowed_origins: str = "http://localhost:3000"
     environment: str = "development"
+    anthropic_api_key: str
 
     class Config:
         env_file = ".env"

@@ -1,27 +1,42 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { getSubscriptions, createSubscription, deleteSubscription, updateSubscription } from '@/lib/api'
 import { Subscription } from '@/types'
 import { SubscriptionCard }       from '@/components/subscriptions/SubscriptionCard'
 import { AddSubscriptionModal }   from '@/components/subscriptions/AddSubscriptionModal'
+import { FilterBar }              from '@/components/shared/FilterBar'
 import { Button }                 from '@/components/ui/button'
 import { Skeleton }               from '@/components/ui/skeleton'
 import { Plus, CreditCard }       from 'lucide-react'
-import { useCurrency } from '@/lib/context/currency'
+import { useCurrency }            from '@/lib/context/currency'
+import { formatCurrency }         from '@/lib/utils/currency'
 import { toast } from 'sonner'
-
-// ─── helpers ─────────────────────────────────────────────────────────────────
 
 function monthlyEquivalent(sub: Subscription): number {
   const amount = sub.converted_amount ?? sub.amount
-  if (sub.cycle === 'weekly')  return amount * 52  / 12
-  if (sub.cycle === 'yearly')  return amount       / 12
+  if (sub.cycle === 'weekly')  return amount * 52 / 12
+  if (sub.cycle === 'yearly')  return amount      / 12
   return amount
 }
 
-// ─── page ─────────────────────────────────────────────────────────────────────
+function inPeriod(dateStr: string | null, period: 'all' | 'day' | 'week' | 'month'): boolean {
+  if (period === 'all' || !dateStr) return true
+  const d = new Date(dateStr)
+  const now = new Date()
+  if (period === 'day') {
+    return d.toDateString() === now.toDateString()
+  }
+  if (period === 'week') {
+    const week = new Date(now); week.setDate(now.getDate() - 7)
+    return d >= week
+  }
+  if (period === 'month') {
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
+  }
+  return true
+}
 
 export default function SubscriptionsPage() {
   const supabase = createClient()
@@ -30,14 +45,23 @@ export default function SubscriptionsPage() {
   const [loading, setLoading]             = useState(true)
   const [error, setError]                 = useState<string | null>(null)
   const [modalOpen, setModalOpen]         = useState(false)
+  const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null)
   const { baseCurrency } = useCurrency()
+
+  // filter / sort / group state
+  const [search, setSearch]                   = useState('')
+  const [selectedCategory, setSelectedCategory] = useState('')
+  const [period, setPeriod]                   = useState<'all' | 'day' | 'week' | 'month'>('all')
+  const [fromDate, setFromDate]               = useState('')
+  const [toDate, setToDate]                   = useState('')
+  const [sortOrder, setSortOrder]             = useState<'desc' | 'asc'>('desc')
+  const [groupByCategory, setGroupByCategory] = useState(false)
 
   // ── fetch ──────────────────────────────────────────────────────────────────
 
   async function fetchSubscriptions() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
-
     try {
       const data = await getSubscriptions(session.access_token)
       setSubscriptions(data)
@@ -56,14 +80,12 @@ export default function SubscriptionsPage() {
   async function handleAdd(formData: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
-
     const created = await createSubscription(session.access_token, formData)
     setSubscriptions(prev => [created, ...prev])
     toast.success('Subscription added')
   }
-    
+
   // ── update ─────────────────────────────────────────────────────────────────
-  const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null)
 
   async function handleEdit(formData: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) {
     const { data: { session } } = await supabase.auth.getSession()
@@ -79,7 +101,6 @@ export default function SubscriptionsPage() {
   async function handleDelete(id: string) {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
-
     await deleteSubscription(session.access_token, id)
     setSubscriptions(prev => prev.filter(s => s.id !== id))
     toast.success('Subscription deleted')
@@ -90,10 +111,77 @@ export default function SubscriptionsPage() {
   const active       = subscriptions.filter(s => s.is_active)
   const totalMonthly = active.reduce((sum, s) => sum + monthlyEquivalent(s), 0)
 
+  // ── filter / sort ──────────────────────────────────────────────────────────
+
+  const categories = useMemo(
+    () => [...new Set(subscriptions.map(s => s.category))].sort(),
+    [subscriptions]
+  )
+
+  const filtered = useMemo(() => {
+    let list = subscriptions.filter(s => {
+      if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false
+      if (selectedCategory && s.category !== selectedCategory) return false
+      if (!inPeriod(s.next_due, period)) return false
+      if (fromDate && s.next_due && s.next_due < fromDate) return false
+      if (toDate   && s.next_due && s.next_due > toDate)   return false
+      return true
+    })
+    list = [...list].sort((a, b) => {
+      const da = a.next_due ?? ''
+      const db = b.next_due ?? ''
+      return sortOrder === 'desc' ? db.localeCompare(da) : da.localeCompare(db)
+    })
+    return list
+  }, [subscriptions, search, selectedCategory, period, fromDate, toDate, sortOrder])
+
+  const totalAmount = filtered.reduce((sum, s) => sum + (s.converted_amount ?? s.amount), 0)
+  const totalLabel  = filtered.length > 0
+    ? `${filtered.length} item${filtered.length !== 1 ? 's' : ''} · ${formatCurrency(totalAmount, baseCurrency)} total`
+    : ''
+
+  const isFiltered = !!(search || selectedCategory || period !== 'all' || fromDate || toDate)
+
+  // ── grouped render helper ──────────────────────────────────────────────────
+
+  function renderList(items: Subscription[]) {
+    return (
+      <div className="rounded-2xl bg-card shadow-md overflow-hidden divide-y divide-border">
+        {items.map(sub => (
+          <SubscriptionCard
+            key={sub.id}
+            subscription={sub}
+            onDelete={handleDelete}
+            onEdit={setEditingSubscription}
+          />
+        ))}
+      </div>
+    )
+  }
+
+  function renderGrouped(items: Subscription[]) {
+    const groups = items.reduce<Record<string, Subscription[]>>((acc, s) => {
+      ;(acc[s.category] ??= []).push(s)
+      return acc
+    }, {})
+    return (
+      <div className="space-y-4">
+        {Object.entries(groups).map(([cat, group]) => (
+          <div key={cat}>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 px-1 capitalize">
+              {cat}
+            </p>
+            {renderList(group)}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
   // ─── render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
+    <div className="mx-auto w-full max-w-5xl px-4 py-8 space-y-6">
 
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -101,7 +189,7 @@ export default function SubscriptionsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Subscriptions</h1>
           {!loading && subscriptions.length > 0 && (
             <p className="text-sm text-muted-foreground mt-0.5">
-              {active.length} active · ~{baseCurrency} {totalMonthly.toFixed(2)}/mo
+              {active.length} active · ~{formatCurrency(totalMonthly, baseCurrency)}/mo
             </p>
           )}
         </div>
@@ -128,12 +216,12 @@ export default function SubscriptionsPage() {
       {loading && (
         <div className="space-y-3">
           {[...Array(4)].map((_, i) => (
-            <Skeleton key={i} className="h-[76px] w-full rounded-lg" />
+            <Skeleton key={i} className="h-[52px] w-full rounded-lg" />
           ))}
         </div>
       )}
 
-      {/* Empty state */}
+      {/* True empty state */}
       {!loading && !error && subscriptions.length === 0 && (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <div className="rounded-full bg-muted p-4 mb-4">
@@ -150,18 +238,48 @@ export default function SubscriptionsPage() {
         </div>
       )}
 
-      {/* List */}
+      {/* FilterBar + list */}
       {!loading && subscriptions.length > 0 && (
-        <div className="space-y-2.5">
-          {subscriptions.map(sub => (
-            <SubscriptionCard
-              key={sub.id}
-              subscription={sub}
-              onDelete={handleDelete}
-              onEdit={setEditingSubscription}
-            />
-          ))}
-        </div>
+        <>
+          <FilterBar
+            categories={categories}
+            selectedCategory={selectedCategory}
+            onCategoryChange={setSelectedCategory}
+            period={period}
+            onPeriodChange={p => setPeriod(p as 'all' | 'day' | 'week' | 'month')}
+            fromDate={fromDate}
+            toDate={toDate}
+            onFromDateChange={setFromDate}
+            onToDateChange={setToDate}
+            sortOrder={sortOrder}
+            onSortOrderChange={setSortOrder}
+            groupByCategory={groupByCategory}
+            onGroupByCategoryChange={setGroupByCategory}
+            totalLabel={totalLabel}
+            searchQuery={search}
+            onSearchChange={setSearch}
+          />
+
+          {/* Filtered empty state */}
+          {filtered.length === 0 && isFiltered && (
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <div className="rounded-full bg-muted p-4 mb-4">
+                <CreditCard className="w-6 h-6 text-muted-foreground" />
+              </div>
+              <p className="font-medium text-sm">
+                {search
+                  ? 'No results for your search'
+                  : selectedCategory
+                  ? `No ${selectedCategory} items`
+                  : 'No items in this period'}
+              </p>
+            </div>
+          )}
+
+          {filtered.length > 0 && (
+            groupByCategory ? renderGrouped(filtered) : renderList(filtered)
+          )}
+        </>
       )}
 
       {/* Add Modal */}

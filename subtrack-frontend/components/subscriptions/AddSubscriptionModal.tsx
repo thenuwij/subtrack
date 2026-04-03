@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useCurrency } from '@/lib/context/currency'
 import { getRates } from '@/lib/api'
 import { createClient } from '@/lib/supabase/client'
+import { formatCurrency } from '@/lib/utils/currency'
 
 const CATEGORIES: Category[] = ['streaming', 'software', 'cloud', 'utilities', 'fitness', 'food', 'transport', 'other']
 const CYCLES: BillingCycle[] = ['weekly', 'monthly', 'yearly']
@@ -194,7 +195,7 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
               {!rateLoading && !rateError && (
                 <span>
                   1 {form.currency} = {exchangeRate.toFixed(4)} {baseCurrency}
-                  {convertedAmount && <span className="ml-2 font-medium text-foreground">≈ {baseCurrency} {convertedAmount.toFixed(2)}</span>}
+                  {convertedAmount && <span className="ml-2 font-medium text-foreground">≈ {formatCurrency(convertedAmount, baseCurrency)}</span>}
                 </span>
               )}
             </div>

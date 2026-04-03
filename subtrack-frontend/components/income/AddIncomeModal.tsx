@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Category, Currency, Expense } from '@/types'
+import { Frequency, Currency, Income } from '@/types'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,15 +12,15 @@ import { getRates } from '@/lib/api'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/utils/currency'
 
-const CATEGORIES: Category[] = ['streaming', 'software', 'cloud', 'utilities', 'fitness', 'food', 'transport', 'other']
+const FREQUENCIES: Frequency[] = ['weekly', 'fortnightly', 'monthly', 'irregular']
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
 const today = new Date().toISOString().split('T')[0]
 
 interface FormState {
-  name: string
-  category: Category
+  source: string
   amount: string
   currency: Currency
+  frequency: Frequency
   date: string
   note: string
 }
@@ -28,35 +28,34 @@ interface FormState {
 interface Props {
   open: boolean
   onClose: () => void
-  onSubmit: (data: Omit<Expense, 'id' | 'user_id' | 'created_at'>) => Promise<void>
-  initialData?: Expense
+  onSubmit: (data: Omit<Income, 'id' | 'user_id' | 'created_at'>) => Promise<void>
+  initialData?: Income
 }
 
-export function AddExpenseModal({ open, onClose, onSubmit, initialData }: Props) {
+export function AddIncomeModal({ open, onClose, onSubmit, initialData }: Props) {
   const { baseCurrency } = useCurrency()
   const isEditing = !!initialData
 
   function getInitialForm(): FormState {
     if (!initialData) return {
-      name: '', category: 'other', amount: '', currency: baseCurrency, date: today, note: '',
+      source: '', amount: '', currency: baseCurrency, frequency: 'monthly', date: today, note: '',
     }
     return {
-      name: initialData.name,
-      category: initialData.category,
+      source: initialData.source ?? '',
       amount: initialData.amount.toString(),
       currency: initialData.currency as Currency,
+      frequency: initialData.frequency,
       date: new Date(initialData.date).toISOString().split('T')[0],
       note: initialData.note ?? '',
     }
   }
 
-  const [form, setForm] = useState<FormState>(getInitialForm)
-
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [exchangeRate, setExchangeRate] = useState<number>(1.0)
-  const [rateLoading, setRateLoading] = useState(false)
-  const [rateError, setRateError] = useState<string | null>(null)
+  const [form, setForm]         = useState<FormState>(getInitialForm)
+  const [loading, setLoading]   = useState(false)
+  const [error, setError]       = useState<string | null>(null)
+  const [exchangeRate, setExchangeRate]   = useState<number>(1.0)
+  const [rateLoading, setRateLoading]     = useState(false)
+  const [rateError, setRateError]         = useState<string | null>(null)
 
   useEffect(() => {
     setForm(getInitialForm())
@@ -65,10 +64,7 @@ export function AddExpenseModal({ open, onClose, onSubmit, initialData }: Props)
   }, [initialData])
 
   useEffect(() => {
-    if (form.currency === baseCurrency) {
-      setExchangeRate(1.0)
-      return
-    }
+    if (form.currency === baseCurrency) { setExchangeRate(1.0); return }
     async function fetchRate() {
       setRateLoading(true)
       setRateError(null)
@@ -100,7 +96,6 @@ export function AddExpenseModal({ open, onClose, onSubmit, initialData }: Props)
   }
 
   async function handleSubmit() {
-    if (!form.name.trim()) return setError('Name is required.')
     if (isNaN(amount) || amount <= 0) return setError('Enter a valid amount greater than 0.')
     if (!form.date) return setError('Date is required.')
     if (rateLoading) return setError('Waiting for exchange rate, please try again.')
@@ -110,12 +105,12 @@ export function AddExpenseModal({ open, onClose, onSubmit, initialData }: Props)
     setError(null)
     try {
       await onSubmit({
-        name: form.name.trim(),
-        category: form.category,
         amount,
         currency: form.currency,
         exchange_rate: exchangeRate,
         converted_amount: form.currency === baseCurrency ? amount : convertedAmount,
+        frequency: form.frequency,
+        source: form.source.trim() || null,
         date: new Date(form.date).toISOString(),
         note: form.note.trim() || null,
       })
@@ -139,29 +134,36 @@ export function AddExpenseModal({ open, onClose, onSubmit, initialData }: Props)
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{isEditing ? 'Edit expense' : 'Log expense'}</DialogTitle>
+          <DialogTitle>{isEditing ? 'Edit income' : 'Log income'}</DialogTitle>
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
           <div className="grid gap-1.5">
-            <Label htmlFor="exp-name">Name</Label>
-            <Input id="exp-name" placeholder="Grocery run, Uber…" value={form.name} onChange={e => set('name', e.target.value)} disabled={loading} />
-          </div>
-
-          <div className="grid gap-1.5">
-            <Label>Category</Label>
-            <Select value={form.category} onValueChange={v => set('category', v as Category)} disabled={loading}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {CATEGORIES.map(c => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="inc-source">
+              Source <span className="font-normal text-muted-foreground">(optional)</span>
+            </Label>
+            <Input
+              id="inc-source"
+              placeholder="Salary, Freelance, Dividends…"
+              value={form.source}
+              onChange={e => set('source', e.target.value)}
+              disabled={loading}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
-              <Label htmlFor="exp-amount">Amount</Label>
-              <Input id="exp-amount" type="number" min="0" step="0.01" placeholder="0.00" value={form.amount} onChange={e => set('amount', e.target.value)} disabled={loading} />
+              <Label htmlFor="inc-amount">Amount</Label>
+              <Input
+                id="inc-amount"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+                value={form.amount}
+                onChange={e => set('amount', e.target.value)}
+                disabled={loading}
+              />
             </div>
             <div className="grid gap-1.5">
               <Label>Currency</Label>
@@ -188,13 +190,25 @@ export function AddExpenseModal({ open, onClose, onSubmit, initialData }: Props)
           )}
 
           <div className="grid gap-1.5">
-            <Label htmlFor="exp-date">Date</Label>
-            <Input id="exp-date" type="date" value={form.date} onChange={e => set('date', e.target.value)} disabled={loading} />
+            <Label>Frequency</Label>
+            <Select value={form.frequency} onValueChange={v => set('frequency', v as Frequency)} disabled={loading}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {FREQUENCIES.map(f => <SelectItem key={f} value={f} className="capitalize">{f}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="exp-note">Note <span className="font-normal text-muted-foreground">(optional)</span></Label>
-            <Input id="exp-note" placeholder="Any extra details…" value={form.note} onChange={e => set('note', e.target.value)} disabled={loading} />
+            <Label htmlFor="inc-date">Date</Label>
+            <Input id="inc-date" type="date" value={form.date} onChange={e => set('date', e.target.value)} disabled={loading} />
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label htmlFor="inc-note">
+              Note <span className="font-normal text-muted-foreground">(optional)</span>
+            </Label>
+            <Input id="inc-note" placeholder="Any extra details…" value={form.note} onChange={e => set('note', e.target.value)} disabled={loading} />
           </div>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
@@ -203,7 +217,7 @@ export function AddExpenseModal({ open, onClose, onSubmit, initialData }: Props)
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={handleClose} disabled={loading}>Cancel</Button>
           <Button onClick={handleSubmit} disabled={loading || rateLoading}>
-            {loading ? (isEditing ? 'Saving…' : 'Saving…') : (isEditing ? 'Save changes' : 'Log expense')}
+            {loading ? 'Saving…' : isEditing ? 'Save changes' : 'Log income'}
           </Button>
         </DialogFooter>
       </DialogContent>

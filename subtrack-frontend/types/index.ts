@@ -1,5 +1,7 @@
 export type BillingCycle = 'weekly' | 'monthly' | 'yearly'
 
+export type Frequency = 'weekly' | 'fortnightly' | 'monthly' | 'irregular'
+
 export type Category =
   | 'streaming'
   | 'software'
@@ -65,4 +67,31 @@ export interface Rates {
 
 export interface Preferences {
   base_currency: Currency
+}
+
+export interface Income {
+  id: string
+  user_id: string
+  amount: number
+  currency: string
+  exchange_rate: number
+  converted_amount: number | null
+  frequency: Frequency
+  source: string | null
+  date: string
+  note: string | null
+  created_at: string
+}
+
+export interface SavingsGoal {
+  id: string
+  user_id: string
+  name: string
+  target_amount: number
+  current_amount: number
+  currency: string
+  target_date: string | null
+  created_by: string
+  created_at: string
+  completed_at: string | null
 }

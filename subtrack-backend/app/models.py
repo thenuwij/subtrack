@@ -10,6 +10,12 @@ class BillingCycle(str, enum.Enum):
     monthly = "monthly"
     yearly = "yearly"
 
+class Frequency(str, enum.Enum):
+    weekly = "weekly"
+    fortnightly = "fortnightly"
+    monthly = "monthly"
+    irregular = "irregular"
+
 class Category(str, enum.Enum):
     streaming = "streaming"
     software = "software"
@@ -57,6 +63,33 @@ class Budget(Base):
     monthly_limit = Column(Float, nullable=False)
     currency = Column(String, default="AUD")
     created_at = Column(DateTime, server_default=func.now())
+
+class Income(Base):
+    __tablename__ = "income"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, nullable=False, index=True)
+    amount = Column(Float, nullable=False)
+    currency = Column(String, default="AUD")
+    exchange_rate = Column(Float, default=1.0)
+    converted_amount = Column(Float, nullable=True)
+    frequency = Column(Enum(Frequency), nullable=False)
+    source = Column(String, nullable=True)
+    date = Column(DateTime, nullable=False)
+    note = Column(String, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+class SavingsGoal(Base):
+    __tablename__ = "savings_goals"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    target_amount = Column(Float, nullable=False)
+    current_amount = Column(Float, default=0.0)
+    currency = Column(String, default="AUD")
+    target_date = Column(DateTime, nullable=True)
+    created_by = Column(String, default="user")
+    created_at = Column(DateTime, server_default=func.now())
+    completed_at = Column(DateTime, nullable=True)
 
 class UserPreference(Base):
     __tablename__ = "user_preferences"

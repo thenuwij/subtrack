@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Trash2 } from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
+import { formatCurrency } from '@/lib/utils/currency'
 
 interface Props {
   budget: Budget
@@ -16,10 +17,11 @@ interface Props {
 export function BudgetCard({ budget, spent, onDelete }: Props) {
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting]     = useState(false)
-  const { baseCurrency } = useCurrency()
+  const { baseCurrency, convertAmount } = useCurrency()
 
-  const pct     = Math.min((spent / budget.monthly_limit) * 100, 100)
-  const overBudget = spent > budget.monthly_limit
+  const limitInBase = convertAmount(budget.monthly_limit, budget.currency ?? baseCurrency)
+  const pct         = Math.min((spent / limitInBase) * 100, 100)
+  const overBudget  = spent > limitInBase
 
   const barColor = overBudget ? 'bg-destructive' : pct >= 80 ? 'bg-warning' : 'bg-primary'
 
@@ -40,7 +42,7 @@ export function BudgetCard({ budget, spent, onDelete }: Props) {
           <div>
             <p className="font-medium text-sm capitalize">{budget.category}</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {baseCurrency} {spent.toFixed(2)} of {budget.monthly_limit.toFixed(2)}
+              {formatCurrency(spent, baseCurrency)} of {formatCurrency(limitInBase, baseCurrency)}
             </p>
           </div>
           <div className="shrink-0 text-right">
@@ -94,7 +96,7 @@ export function BudgetCard({ budget, spent, onDelete }: Props) {
 
         {overBudget && (
           <p className="text-xs text-destructive mt-1.5">
-            Over budget by {baseCurrency} {(spent - budget.monthly_limit).toFixed(2)}
+            Over budget by {formatCurrency(spent - limitInBase, baseCurrency)}
           </p>
         )}
       </CardContent>

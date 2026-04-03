@@ -6,17 +6,10 @@ import { createClient } from '@/lib/supabase/client'
 import { getSubscriptions, getExpenses, getBudgets } from '@/lib/api'
 import type { Subscription, Expense, Budget } from '@/types'
 import { useCurrency } from '@/lib/context/currency'
+import { formatCurrency } from '@/lib/utils/currency'
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
-}
-
-function formatCurrency(amount: number, currency: string) {
-  return new Intl.NumberFormat('en-AU', {
-    style: 'currency',
-    currency: currency,
-    maximumFractionDigits: 2,
-  }).format(amount)
 }
 
 function formatDate(date: string | null | undefined) {
@@ -75,7 +68,7 @@ export default function DashboardPage() {
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [budgets, setBudgets] = useState<Budget[]>([])
   const [loading, setLoading] = useState(true)
-  const { baseCurrency } = useCurrency()
+  const { baseCurrency, convertAmount } = useCurrency()
 
   useEffect(() => {
     async function fetchData() {
@@ -110,9 +103,9 @@ export default function DashboardPage() {
 
   const monthlyBurn = useMemo(() => {
     return subscriptions.reduce((sum, s) => {
-      return sum + toMonthly(s.converted_amount ?? s.amount, s.cycle)
+      return sum + convertAmount(toMonthly(s.amount, s.cycle), s.currency)
     }, 0)
-  }, [subscriptions])
+  }, [subscriptions, convertAmount])
 
   const monthlyExpenses = useMemo(() => {
     return expenses.filter((expense) => {
@@ -276,8 +269,13 @@ export default function DashboardPage() {
                       <div className="flex items-center justify-between gap-4 sm:justify-end">
                         <div className="text-left sm:text-right">
                           <p className="text-sm font-semibold text-foreground">
-                            {formatCurrency(subscription.amount,  baseCurrency)}
+                            {formatCurrency(subscription.amount, subscription.currency)}
                           </p>
+                          {subscription.currency !== baseCurrency && (
+                            <p className="text-xs text-muted-foreground">
+                              ≈ {formatCurrency(convertAmount(subscription.amount, subscription.currency), baseCurrency)}
+                            </p>
+                          )}
                           <p className="text-xs text-muted-foreground">
                             Due {formatDate(subscription.next_due)}
                           </p>
@@ -334,7 +332,7 @@ export default function DashboardPage() {
                 {budgets.map((budget) => {
                   const spent = monthlyExpenses
                     .filter((expense) => expense.category === budget.category)
-                    .reduce((sum, expense) => sum + expense.amount, 0)
+                    .reduce((sum, expense) => sum + (expense.converted_amount ?? convertAmount(expense.amount, expense.currency)), 0)
 
                   const percent = budget.monthly_limit > 0
                     ? (spent / budget.monthly_limit) * 100

@@ -72,7 +72,7 @@ export default function BudgetsPage() {
   const existingCategories = budgets.map(b => b.category as Category)
 
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
+    <div className="mx-auto w-full max-w-5xl px-4 py-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Budgets</h1>
