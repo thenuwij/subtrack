@@ -83,6 +83,48 @@ TOOL_DEFINITIONS = [
         }
     },
     {
+        "name": "delete_expense",
+        "description": "Delete an expense by ID. Only call this after confirming with the user which expense to delete.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expense_id": {
+                    "type": "string",
+                    "description": "The UUID of the expense to delete"
+                }
+            },
+            "required": ["expense_id"]
+        }
+    },
+    {
+        "name": "delete_subscription",
+        "description": "Delete a subscription by ID. Only call this after confirming with the user which subscription to delete.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subscription_id": {
+                    "type": "string",
+                    "description": "The UUID of the subscription to delete"
+                }
+            },
+            "required": ["subscription_id"]
+        }
+    },
+    {
+        "name": "delete_savings_goal",
+        "description": "Delete a savings goal by ID. Only call this after confirming with the user.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal_id": {
+                    "type": "string",
+                    "description": "The UUID of the savings goal to delete"
+                }
+            },
+            "required": ["goal_id"]
+        }
+    },
+    {
         "name": "create_savings_goal",
         "description": "Create a new savings goal for the user.",
         "input_schema": {
@@ -243,6 +285,45 @@ def create_savings_goal(db: Session, user_id: str, name: str,
     return {"success": True, "name": goal.name, "target_amount": goal.target_amount}
 
 
+def delete_expense(db: Session, user_id: str, expense_id: str):
+    from uuid import UUID
+    expense = db.query(Expense).filter(
+        Expense.id == UUID(expense_id),
+        Expense.user_id == user_id
+    ).first()
+    if not expense:
+        return {"success": False, "error": "Expense not found"}
+    db.delete(expense)
+    db.commit()
+    return {"success": True, "deleted": expense.name}
+
+
+def delete_subscription(db: Session, user_id: str, subscription_id: str):
+    from uuid import UUID
+    sub = db.query(Subscription).filter(
+        Subscription.id == UUID(subscription_id),
+        Subscription.user_id == user_id
+    ).first()
+    if not sub:
+        return {"success": False, "error": "Subscription not found"}
+    db.delete(sub)
+    db.commit()
+    return {"success": True, "deleted": sub.name}
+
+
+def delete_savings_goal(db: Session, user_id: str, goal_id: str):
+    from uuid import UUID
+    goal = db.query(SavingsGoal).filter(
+        SavingsGoal.id == UUID(goal_id),
+        SavingsGoal.user_id == user_id
+    ).first()
+    if not goal:
+        return {"success": False, "error": "Goal not found"}
+    db.delete(goal)
+    db.commit()
+    return {"success": True, "deleted": goal.name}
+
+
 # ── Dispatcher ────────────────────────────────────────────────────────────────
 # When Claude says "call get_monthly_expenses with these args",
 # this function maps the tool name to the right Python function.
@@ -263,5 +344,11 @@ def run_tool(tool_name: str, tool_input: dict, db: Session, user_id: str):
         return create_expense(db, user_id, **tool_input)
     elif tool_name == "create_savings_goal":
         return create_savings_goal(db, user_id, **tool_input)
+    elif tool_name == "delete_expense":
+        return delete_expense(db, user_id, **tool_input)
+    elif tool_name == "delete_subscription":
+        return delete_subscription(db, user_id, **tool_input)
+    elif tool_name == "delete_savings_goal":
+        return delete_savings_goal(db, user_id, **tool_input)
     else:
         return {"error": f"Unknown tool: {tool_name}"}
