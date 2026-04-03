@@ -45,7 +45,7 @@ export function AgentChat() {
 
       // Send full history + new message to agent
       // History is everything except the message we just added
-      const response = await fetch('http://localhost:8000/agent/chat', {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/agent/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
