@@ -37,7 +37,7 @@ export default function ExpensesPage() {
   const [error, setError]         = useState<string | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
-  const { baseCurrency } = useCurrency()
+  const { baseCurrency, convertAmount } = useCurrency()
 
   // filter / sort / group state
   const [search, setSearch]                     = useState('')
@@ -105,7 +105,7 @@ export default function ExpensesPage() {
       const d = new Date(e.date)
       return d.getMonth() === thisMonth.getMonth() && d.getFullYear() === thisMonth.getFullYear()
     })
-    .reduce((sum, e) => sum + (e.converted_amount ?? e.amount), 0)
+    .reduce((sum, e) => sum + convertAmount(e.amount, e.currency), 0)
 
   // ── filter / sort ──────────────────────────────────────────────────────────
 
@@ -131,7 +131,7 @@ export default function ExpensesPage() {
     return list
   }, [expenses, search, selectedCategory, period, fromDate, toDate, sortOrder])
 
-  const totalAmount = filtered.reduce((sum, e) => sum + (e.converted_amount ?? e.amount), 0)
+  const totalAmount = filtered.reduce((sum, e) => sum + convertAmount(e.amount, e.currency), 0)
   const totalLabel  = filtered.length > 0
     ? `${filtered.length} item${filtered.length !== 1 ? 's' : ''} · ${formatCurrency(totalAmount, baseCurrency)} total`
     : ''
