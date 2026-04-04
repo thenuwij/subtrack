@@ -118,8 +118,10 @@ export default function DashboardPage() {
   }, [expenses, currentMonth])
 
   const totalExpenses = useMemo(() => {
-    return monthlyExpenses.reduce((sum, e) => sum + (e.converted_amount ?? e.amount), 0)
-  }, [monthlyExpenses])
+    return monthlyExpenses.reduce((sum, e) => {
+      return sum + convertAmount(e.amount, e.currency)
+    }, 0)
+  }, [monthlyExpenses, convertAmount])
 
   const upcoming = useMemo(() => {
     return subscriptions
