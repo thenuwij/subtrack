@@ -34,7 +34,7 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const isAuthPage = request.nextUrl.pathname.startsWith('/login')
-  const isProtectedPage = ['/dashboard', '/subscriptions', '/expenses', '/budgets', '/income', '/savings'].some(
+  const isProtectedPage = ['/dashboard', '/subscriptions', '/expenses', '/budgets', '/income', '/savings', '/account'].some(
     path => request.nextUrl.pathname.startsWith(path)
   )
 
@@ -50,5 +50,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/subscriptions/:path*', '/expenses/:path*', '/budgets/:path*', '/income/:path*', '/savings/:path*', '/login'],
+  matcher: ['/dashboard/:path*', '/subscriptions/:path*', '/expenses/:path*', '/budgets/:path*', '/income/:path*', '/savings/:path*', '/account/:path*', '/login'],
 }

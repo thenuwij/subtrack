@@ -2,7 +2,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { LayoutDashboard, CreditCard, Receipt, PiggyBank, TrendingUp, Target, LogOut } from 'lucide-react'
+import { LayoutDashboard, CreditCard, Receipt, PiggyBank, TrendingUp, Target, LogOut, UserCircle } from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
 import type { Currency } from '@/types'
 
@@ -13,6 +13,7 @@ const links = [
   { href: '/income',        label: 'Income',        icon: TrendingUp },
   { href: '/budgets',       label: 'Budgets',       icon: PiggyBank },
   { href: '/savings',       label: 'Savings',       icon: Target },
+  { href: '/account',       label: 'Account',       icon: UserCircle },
 ]
 
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']

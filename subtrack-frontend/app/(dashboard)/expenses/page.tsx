@@ -14,6 +14,9 @@ import { useCurrency }     from '@/lib/context/currency'
 import { formatCurrency }  from '@/lib/utils/currency'
 import { toast } from 'sonner'
 
+const supabase = createClient()
+supabase.auth.getUser().then(({ data }) => console.log(data))
+
 function inPeriod(dateStr: string, period: 'all' | 'day' | 'week' | 'month'): boolean {
   if (period === 'all') return true
   const d = new Date(dateStr)
