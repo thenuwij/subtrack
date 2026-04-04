@@ -12,6 +12,8 @@ import { getRates } from '@/lib/api'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/utils/currency'
 
+const today = new Date().toISOString().split('T')[0]
+
 const CATEGORIES: Category[] = ['streaming', 'software', 'cloud', 'utilities', 'fitness', 'food', 'transport', 'other']
 const CYCLES: BillingCycle[] = ['weekly', 'monthly', 'yearly']
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
@@ -43,7 +45,7 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
     amount: '',
     currency: baseCurrency,
     cycle: 'monthly',
-    next_due: '',
+    next_due: today,
     is_active: true,
   }
 
