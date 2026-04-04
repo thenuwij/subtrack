@@ -125,6 +125,21 @@ TOOL_DEFINITIONS = [
         }
     },
     {
+        "name": "create_income",
+        "description": "Log a new income entry for the user. Only call this after confirming details with the user.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "amount":    { "type": "number", "description": "Income amount" },
+                "currency":  { "type": "string", "description": "Currency code e.g. AUD, USD" },
+                "frequency": { "type": "string", "description": "One of: weekly, fortnightly, monthly, irregular" },
+                "source":    { "type": "string", "description": "Income source e.g. 'Salary', 'Freelance'" },
+                "date":      { "type": "string", "description": "Date in YYYY-MM-DD format" }
+            },
+            "required": ["amount", "currency", "frequency", "date"]
+        }
+    },
+    {
         "name": "create_savings_goal",
         "description": "Create a new savings goal for the user.",
         "input_schema": {
@@ -288,6 +303,24 @@ def create_savings_goal(db: Session, user_id: str, name: str,
     return {"success": True, "name": goal.name, "target_amount": goal.target_amount}
 
 
+def create_income(db: Session, user_id: str, amount: float, currency: str,
+                  frequency: str, date: str, source: str = None):
+    entry = Income(
+        user_id=user_id,
+        amount=amount,
+        currency=currency,
+        exchange_rate=1.0,
+        converted_amount=amount,
+        frequency=frequency,
+        source=source,
+        date=datetime.strptime(date, "%Y-%m-%d"),
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return {"success": True, "amount": entry.amount, "frequency": entry.frequency.value, "source": entry.source}
+
+
 def delete_expense(db: Session, user_id: str, expense_id: str):
     from uuid import UUID
     expense = db.query(Expense).filter(
@@ -345,6 +378,8 @@ def run_tool(tool_name: str, tool_input: dict, db: Session, user_id: str):
         return get_income_entries(db, user_id, **tool_input)
     elif tool_name == "create_expense":
         return create_expense(db, user_id, **tool_input)
+    elif tool_name == "create_income":
+        return create_income(db, user_id, **tool_input)
     elif tool_name == "create_savings_goal":
         return create_savings_goal(db, user_id, **tool_input)
     elif tool_name == "delete_expense":
