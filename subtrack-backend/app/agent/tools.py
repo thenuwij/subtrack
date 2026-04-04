@@ -168,6 +168,7 @@ def get_monthly_expenses(db: Session, user_id: str, month: str, category: str = 
     # Return plain dicts — Claude receives JSON, not SQLAlchemy objects
     return [
         {
+            "id": str(e.id),
             "name": e.name,
             "amount": e.amount,
             "currency": e.currency,
@@ -188,6 +189,7 @@ def get_subscriptions(db: Session, user_id: str):
 
     return [
         {
+            "id": str(s.id),
             "name": s.name,
             "amount": s.amount,
             "currency": s.currency,
@@ -240,6 +242,7 @@ def get_income_entries(db: Session, user_id: str, months: int = 3):
 
     return [
         {
+            "id": str(i.id),
             "amount": i.amount,
             "currency": i.currency,
             "converted_amount": i.converted_amount,
