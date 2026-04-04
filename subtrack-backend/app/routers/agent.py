@@ -1,5 +1,6 @@
 import json
 import anthropic
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -14,18 +15,6 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 # This is the Anthropic client — it reads ANTHROPIC_API_KEY from env automatically
 client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-SYSTEM_PROMPT = """You are Subtrack's financial assistant. You have access to the user's real financial data through tools.
-
-Rules:
-- Always use tools to get real data before answering financial questions. Never guess amounts.
-- When logging expenses, confirm the details back to the user before saving. Only call create_expense if the user has confirmed.
-- Be concise. One or two sentences is usually enough.
-- If asked to create something, do it and confirm it was done.
-- When a user can't afford something, offer to create a savings goal.
-- Always refer to amounts in the user's base currency unless they specify otherwise.
-- Never make up financial data. If you don't have it, say so.
-
-Personality: Direct, helpful, occasionally dry. Not overly enthusiastic."""
 
 
 class ChatMessage(BaseModel):
@@ -44,6 +33,26 @@ def chat(
     user_id: str = Depends(verify_token),
     db: Session = Depends(get_db)
 ):
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    current_month = datetime.utcnow().strftime("%Y-%m")
+
+    system_prompt = f"""You are Subtrack's financial assistant. Today's date is {today}. The current month is {current_month}.
+
+You have access to the user's real financial data through tools.
+
+Rules:
+- Always use tools to get real data before answering financial questions. Never guess amounts.
+- When the user asks about "this month", always use {current_month} as the month parameter.
+- When logging expenses without a specified date, use {today} as the date.
+- When logging expenses, confirm the details back to the user before saving.
+- Be concise. One or two sentences is usually enough.
+- If asked to create something, do it and confirm it was done.
+- When a user can't afford something, offer to create a savings goal.
+- Always refer to amounts in the user's base currency unless they specify otherwise.
+- Never make up financial data. If you don't have it, say so.
+
+Personality: Direct, helpful, occasionally dry. Not overly enthusiastic."""
+
     # Build the messages list from history + new message
     # Claude needs the full conversation history each time —
     # it has no memory between requests, so we pass it all in
@@ -61,7 +70,7 @@ def chat(
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             tools=TOOL_DEFINITIONS,
             messages=messages
         )
