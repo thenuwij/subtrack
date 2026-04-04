@@ -63,13 +63,12 @@ export function ExpenseCard({ expense, onDelete, onEdit }: Props) {
           <p className="font-semibold text-sm tabular-nums leading-tight">
             {formatCurrency(expense.amount, expense.currency)}
           </p>
-          {expense.converted_amount != null && expense.currency !== baseCurrency ? (
+          {expense.converted_amount != null && expense.currency !== baseCurrency && (
             <p className="text-xs text-muted-foreground mt-0.5">
               ≈ {formatCurrency(expense.converted_amount, baseCurrency)}
             </p>
-          ) : (
-            <p className="text-xs text-muted-foreground mt-0.5">{dateLabel}</p>
           )}
+          <p className="text-xs text-muted-foreground mt-0.5">{dateLabel}</p>
         </div>
 
         {!confirming ? (

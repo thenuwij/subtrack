@@ -111,7 +111,7 @@ export function AddIncomeModal({ open, onClose, onSubmit, initialData }: Props) 
         converted_amount: form.currency === baseCurrency ? amount : convertedAmount,
         frequency: form.frequency,
         source: form.source.trim() || null,
-        date: new Date(form.date).toISOString(),
+        date: new Date(form.date || today).toISOString(),
         note: form.note.trim() || null,
       })
       setForm(getInitialForm)

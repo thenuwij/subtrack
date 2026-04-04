@@ -131,7 +131,7 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
         exchange_rate: exchangeRate,
         converted_amount: form.currency === baseCurrency ? amount : convertedAmount,
         cycle: form.cycle,
-        next_due: form.next_due || null,
+        next_due: form.next_due ? new Date(form.next_due).toISOString() : new Date(today).toISOString(),
         is_active: form.is_active,
       })
       setForm(DEFAULT_FORM)

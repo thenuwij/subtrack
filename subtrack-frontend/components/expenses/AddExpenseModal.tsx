@@ -116,7 +116,7 @@ export function AddExpenseModal({ open, onClose, onSubmit, initialData }: Props)
         currency: form.currency,
         exchange_rate: exchangeRate,
         converted_amount: form.currency === baseCurrency ? amount : convertedAmount,
-        date: new Date(form.date).toISOString(),
+        date: new Date(form.date || today).toISOString(),
         note: form.note.trim() || null,
       })
       setForm(getInitialForm)
