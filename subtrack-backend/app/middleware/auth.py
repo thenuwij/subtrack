@@ -60,10 +60,11 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
         kid = header.get("kid")
 
         if alg != "HS256" and kid:
-            jwk = _find_jwk(kid)
-            if jwk is None:
+            jwk_dict = _find_jwk(kid)
+            if jwk_dict is None:
                 raise HTTPException(status_code=401, detail="Invalid or expired token")
-            key: Any = jwk
+            from jose import jwk as jose_jwk
+            key: Any = jose_jwk.construct(jwk_dict, algorithm=alg)
             algorithms = [alg]
         else:
             key = settings.supabase_jwt_secret
