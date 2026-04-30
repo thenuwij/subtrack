@@ -3,9 +3,10 @@ import time
 from typing import Any, Optional
 
 import httpx
+import jwt
 from fastapi import HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import jwt, JWTError
+from jwt.algorithms import ECAlgorithm
 
 from app.config import settings
 
@@ -38,7 +39,7 @@ def _fetch_jwks(force: bool = False) -> Optional[dict]:
         _jwks_cache["fetched_at"] = now
         return _jwks_cache["keys"]
     except Exception as e:
-        logger.warning("Failed to fetch Supabase JWKS from %s: %s", url, e)
+        logger.error("Failed to fetch Supabase JWKS from %s: %s", url, e)
         return None
 
 
@@ -56,16 +57,19 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
     token = credentials.credentials
     try:
         header = jwt.get_unverified_header(token)
-        alg = header.get("alg", "HS256")
         kid = header.get("kid")
 
-        if alg != "HS256" and kid:
+        if kid:
             jwk_dict = _find_jwk(kid)
             if jwk_dict is None:
+                logger.error("No JWK found for kid=%s", kid)
                 raise HTTPException(status_code=401, detail="Invalid or expired token")
-            from jose import jwk as jose_jwk
-            key: Any = jose_jwk.construct(jwk_dict, algorithm=alg)
-            algorithms = [alg]
+            try:
+                key = ECAlgorithm.from_jwk(jwk_dict)
+            except Exception as e:
+                logger.error("Failed to construct EC key from JWK (kid=%s): %s", kid, e)
+                raise HTTPException(status_code=401, detail="Invalid or expired token")
+            algorithms = ["ES256"]
         else:
             key = settings.supabase_jwt_secret
             algorithms = ["HS256"]
@@ -78,7 +82,14 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
         )
         user_id: Optional[str] = payload.get("sub")
         if user_id is None:
+            logger.error("JWT payload missing 'sub' claim")
             raise HTTPException(status_code=401, detail="Invalid token")
         return user_id
-    except JWTError:
+    except HTTPException:
+        raise
+    except jwt.PyJWTError as e:
+        logger.error("JWT verification failed: %s", e)
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except Exception as e:
+        logger.error("Unexpected error during token verification: %s", e)
         raise HTTPException(status_code=401, detail="Invalid or expired token")
