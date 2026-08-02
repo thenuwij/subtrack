@@ -24,21 +24,10 @@ const CYCLE_LABEL: Record<string, string> = {
   yearly:  '/yr',
 }
 
-function formatDueDate(dateStr: string): { label: string; urgency: 'overdue' | 'soon' | 'normal' } {
-  const due = new Date(dateStr)
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  due.setHours(0, 0, 0, 0)
-  const diff = Math.round((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-
-  if (diff < 0)   return { label: 'Overdue',   urgency: 'overdue' }
-  if (diff === 0) return { label: 'Due today', urgency: 'soon'    }
-  if (diff <= 7)  return { label: `${diff}d`,  urgency: 'soon'    }
-
-  return {
-    label: due.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }),
-    urgency: 'normal',
-  }
+// Just the date it next goes out. Subtrack isn't tracking whether payments landed,
+// so anything framed as overdue/due-soon would be claiming knowledge it doesn't have.
+function formatNextDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
 }
 
 interface Props {
@@ -52,12 +41,7 @@ export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
   const [deleting, setDeleting]     = useState(false)
   const { baseCurrency, convertAmount } = useCurrency()
 
-  const due = subscription.next_due ? formatDueDate(subscription.next_due) : null
-
-  const urgencyClass =
-    due?.urgency === 'overdue' ? 'text-destructive' :
-    due?.urgency === 'soon'    ? 'text-amber-500'   :
-                                 'text-muted-foreground'
+  const nextDate = subscription.next_due ? formatNextDate(subscription.next_due) : null
 
   async function handleDelete() {
     setDeleting(true)
@@ -81,9 +65,7 @@ export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
           <p className="font-medium text-sm truncate leading-tight">{subscription.name}</p>
           <p className="text-xs text-muted-foreground mt-0.5">
             {subscription.category}
-            {due && (
-              <span className={`ml-1.5 ${urgencyClass}`}>· {due.label}</span>
-            )}
+            {nextDate && <span className="ml-1.5">· next {nextDate}</span>}
           </p>
         </div>
       </div>

@@ -2,16 +2,13 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { LayoutDashboard, CreditCard, Receipt, PiggyBank, TrendingUp, Target, LogOut, UserCircle } from 'lucide-react'
+import { LayoutDashboard, CreditCard, Target, LogOut, UserCircle } from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
 import type { Currency } from '@/types'
 
 const links = [
   { href: '/dashboard',     label: 'Dashboard',     icon: LayoutDashboard },
   { href: '/subscriptions', label: 'Subscriptions', icon: CreditCard },
-  { href: '/expenses',      label: 'Expenses',      icon: Receipt },
-  { href: '/income',        label: 'Income',        icon: TrendingUp },
-  { href: '/budgets',       label: 'Budgets',       icon: PiggyBank },
   { href: '/savings',       label: 'Savings',       icon: Target },
   { href: '/account',       label: 'Account',       icon: UserCircle },
 ]
@@ -39,7 +36,7 @@ export default function Navbar() {
           </div>
           <h1 className="text-sm font-semibold text-foreground tracking-tight">Subtrack</h1>
         </div>
-        <p className="text-xs text-muted-foreground mt-1 ml-8">Finance tracker</p>
+        <p className="text-xs text-muted-foreground mt-1 ml-8">Subscription tracker</p>
       </div>
 
       {/* Nav links */}

@@ -98,7 +98,7 @@ export function AgentChat() {
           <div className="flex flex-col gap-3 overflow-y-auto p-4 h-[420px]">
             {messages.length === 0 && (
               <p className="text-xs text-muted-foreground text-center mt-8">
-                Ask me anything about your subscriptions, expenses, or budgets.
+                Ask me anything about your subscriptions and what they cost you.
               </p>
             )}
             {messages.map((msg, i) => (

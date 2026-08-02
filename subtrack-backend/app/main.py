@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.config import settings
 from app.database import Base, engine
-from app.routers import subscriptions, expenses, budgets, rates, preferences, income, savings, agent
+from app.routers import subscriptions, rates, preferences, savings, agent
 
 
 # Logging config
@@ -31,11 +31,8 @@ app.add_middleware(
 
 # Routers
 app.include_router(subscriptions.router)
-app.include_router(expenses.router)
-app.include_router(budgets.router)
 app.include_router(rates.router)
 app.include_router(preferences.router)
-app.include_router(income.router)
 app.include_router(savings.router)
 app.include_router(agent.router)
 

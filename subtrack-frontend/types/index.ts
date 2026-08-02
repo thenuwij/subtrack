@@ -1,7 +1,5 @@
 export type BillingCycle = 'weekly' | 'monthly' | 'yearly'
 
-export type Frequency = 'weekly' | 'fortnightly' | 'monthly' | 'irregular'
-
 export type Category =
   | 'streaming'
   | 'software'
@@ -29,27 +27,18 @@ export interface Subscription {
   created_at: string
 }
 
-export interface Expense {
-  id: string
-  user_id: string
-  name: string
-  category: Category
-  amount: number
-  currency: string
-  exchange_rate: number
-  converted_amount: number | null  // null for legacy entries
-  date: string
-  note: string | null
-  created_at: string
-}
+export type ChangeKind = 'added' | 'price_change' | 'removed'
 
-export interface Budget {
+export interface SubscriptionChange {
   id: string
-  user_id: string
-  category: Category
-  monthly_limit: number
+  subscription_id: string
+  name: string
+  kind: ChangeKind
+  old_monthly: number | null
+  new_monthly: number | null
+  delta: number           // monthly-equivalent change, in the entry's currency
   currency: string
-  created_at: string
+  changed_at: string
 }
 
 export interface User {
@@ -67,20 +56,7 @@ export interface Rates {
 
 export interface Preferences {
   base_currency: Currency
-}
-
-export interface Income {
-  id: string
-  user_id: string
-  amount: number
-  currency: string
-  exchange_rate: number
-  converted_amount: number | null
-  frequency: Frequency
-  source: string | null
-  date: string
-  note: string | null
-  created_at: string
+  monthly_income: number | null  // null until the user states it
 }
 
 export interface SavingsGoal {

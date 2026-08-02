@@ -10,12 +10,6 @@ class BillingCycle(str, enum.Enum):
     monthly = "monthly"
     yearly = "yearly"
 
-class Frequency(str, enum.Enum):
-    weekly = "weekly"
-    fortnightly = "fortnightly"
-    monthly = "monthly"
-    irregular = "irregular"
-
 class Category(str, enum.Enum):
     streaming = "streaming"
     software = "software"
@@ -41,42 +35,27 @@ class Subscription(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
 
-class Expense(Base):
-    __tablename__ = "expenses"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(String, nullable=False, index=True)
-    name = Column(String, nullable=False)
-    category = Column(Enum(Category), nullable=False)
-    amount = Column(Float, nullable=False)
-    currency = Column(String, default="AUD")
-    exchange_rate = Column(Float, default=1.0)        # rate used at time of entry
-    converted_amount = Column(Float, nullable=True)   # amount in user's base currency
-    date = Column(DateTime, nullable=False)
-    note = Column(String, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
+class ChangeKind(str, enum.Enum):
+    added = "added"
+    price_change = "price_change"
+    removed = "removed"
 
-class Budget(Base):
-    __tablename__ = "budgets"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(String, nullable=False, index=True)
-    category = Column(Enum(Category), nullable=False)
-    monthly_limit = Column(Float, nullable=False)
-    currency = Column(String, default="AUD")
-    created_at = Column(DateTime, server_default=func.now())
+class SubscriptionChange(Base):
+    """Append-only log of subscription changes.
 
-class Income(Base):
-    __tablename__ = "income"
+    Without this the app can only ever show what a subscription costs *now* —
+    it could never answer "what changed since last month", which is the whole point.
+    """
+    __tablename__ = "subscription_changes"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(String, nullable=False, index=True)
-    amount = Column(Float, nullable=False)
+    subscription_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    name = Column(String, nullable=False)             # denormalised so removals still read well
+    kind = Column(Enum(ChangeKind), nullable=False)
+    old_monthly = Column(Float, nullable=True)        # monthly-equivalent, in entry currency
+    new_monthly = Column(Float, nullable=True)
     currency = Column(String, default="AUD")
-    exchange_rate = Column(Float, default=1.0)
-    converted_amount = Column(Float, nullable=True)
-    frequency = Column(Enum(Frequency), nullable=False)
-    source = Column(String, nullable=True)
-    date = Column(DateTime, nullable=False)
-    note = Column(String, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
+    changed_at = Column(DateTime, server_default=func.now(), index=True)
 
 class SavingsGoal(Base):
     __tablename__ = "savings_goals"
@@ -95,4 +74,5 @@ class UserPreference(Base):
     __tablename__ = "user_preferences"
     user_id = Column(String, primary_key=True)        # Supabase user ID
     base_currency = Column(String, default="AUD")
+    monthly_income = Column(Float, nullable=True)     # in base currency; drives share-of-income
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

@@ -73,7 +73,7 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
     if (!session) return
 
     setBaseCurrencyState(currency)
-    await updatePreferences(session.access_token, currency)
+    await updatePreferences(session.access_token, { base_currency: currency })
     await fetchRates(currency, session.access_token)
   }
 
