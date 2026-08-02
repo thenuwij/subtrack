@@ -57,6 +57,15 @@ class SubscriptionChange(Base):
     currency = Column(String, default="AUD")
     changed_at = Column(DateTime, server_default=func.now(), index=True)
 
+class GmailAccount(Base):
+    """A connected Gmail mailbox. Stores only the refresh token, encrypted."""
+    __tablename__ = "gmail_accounts"
+    user_id = Column(String, primary_key=True)        # Supabase user ID
+    email_address = Column(String, nullable=False)
+    refresh_token_encrypted = Column(Text, nullable=False)
+    connected_at = Column(DateTime, server_default=func.now())
+    last_scanned_at = Column(DateTime, nullable=True)
+
 class SavingsGoal(Base):
     __tablename__ = "savings_goals"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

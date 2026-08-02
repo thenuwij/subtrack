@@ -34,3 +34,8 @@ typing_extensions==4.15.0
 uvicorn==0.42.0
 wrapt==2.1.2
 anthropic==0.88.0
+google-api-python-client==2.198.0
+google-auth==2.56.2
+google-auth-httplib2==0.4.0
+google-auth-oauthlib==1.4.0
+googleapis-common-protos==1.75.0
