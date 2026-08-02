@@ -4,7 +4,15 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useCurrency } from '@/lib/context/currency'
-import { getPreferences, updatePreferences } from '@/lib/api'
+import {
+  disconnectGmail,
+  getGmailConnectUrl,
+  getGmailStatus,
+  getPreferences,
+  startGmailScan,
+  updatePreferences,
+} from '@/lib/api'
+import type { GmailStatus } from '@/types'
 import type { User } from '@supabase/supabase-js'
 import type { Currency } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -17,6 +25,8 @@ export default function AccountPage() {
   const [imgError, setImgError] = useState(false)
   const [income, setIncome] = useState('')
   const [incomeStatus, setIncomeStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [gmail, setGmail] = useState<GmailStatus | null>(null)
+  const [gmailBusy, setGmailBusy] = useState(false)
   const { baseCurrency, setBaseCurrency, isLoading } = useCurrency()
 
   useEffect(() => {
@@ -32,7 +42,51 @@ export default function AccountPage() {
       }
     }
     loadIncome()
+
+    async function loadGmail() {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
+      try {
+        setGmail(await getGmailStatus(session.access_token))
+      } catch {
+        // Gmail may not be configured on this deployment; the section just hides.
+      }
+    }
+    loadGmail()
   }, [])
+
+  async function withToken<T>(fn: (token: string) => Promise<T>) {
+    const { data: { session } } = await createClient().auth.getSession()
+    if (!session) return
+    setGmailBusy(true)
+    try {
+      return await fn(session.access_token)
+    } finally {
+      setGmailBusy(false)
+    }
+  }
+
+  async function handleConnectGmail() {
+    await withToken(async token => {
+      const { auth_url } = await getGmailConnectUrl(token)
+      window.location.href = auth_url
+    })
+  }
+
+  async function handleScan() {
+    await withToken(async token => {
+      await startGmailScan(token)
+      setGmail(g => (g ? { ...g, scan_status: 'running' } : g))
+      router.push('/review')
+    })
+  }
+
+  async function handleDisconnectGmail() {
+    await withToken(async token => {
+      await disconnectGmail(token)
+      setGmail({ connected: false })
+    })
+  }
 
   async function handleSaveIncome() {
     const value = Number(income)
@@ -83,6 +137,9 @@ export default function AccountPage() {
         <div className="flex items-center gap-4">
           {/* Avatar */}
           {avatarUrl && !imgError ? (
+            /* External Google avatar; next/image would need a remote-host
+               allowlist for a 56px image with no optimization benefit. */
+            // eslint-disable-next-line @next/next/no-img-element
             <img
               src={avatarUrl}
               alt={fullName}
@@ -171,6 +228,74 @@ export default function AccountPage() {
           <p className="text-xs text-destructive">Enter a valid amount and try again.</p>
         )}
       </div>
+
+      {/* Section 3 — Connected inbox */}
+      {gmail && (
+        <div className="rounded-2xl bg-card shadow-md p-6 space-y-4">
+          <h2 className="text-lg font-semibold">Inbox</h2>
+
+          {gmail.connected ? (
+            <>
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{gmail.email_address}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {gmail.scan_status === 'running'
+                      ? 'Scanning your inbox…'
+                      : gmail.last_scanned_at
+                        ? `Last scanned ${new Date(gmail.last_scanned_at).toLocaleDateString('en-AU', {
+                            day: 'numeric', month: 'short', year: 'numeric',
+                          })}`
+                        : 'Not scanned yet'}
+                  </p>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <Button
+                    onClick={handleScan}
+                    disabled={gmailBusy || gmail.scan_status === 'running'}
+                  >
+                    {gmail.scan_status === 'running' ? 'Scanning' : 'Scan inbox'}
+                  </Button>
+                </div>
+              </div>
+
+              {gmail.scan_error && (
+                <p className="text-xs text-destructive">Last scan failed: {gmail.scan_error}</p>
+              )}
+
+              <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
+                <div>
+                  <p className="text-sm font-medium">Disconnect</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Subtrack keeps your subscriptions but stops reading your email
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  onClick={handleDisconnectGmail}
+                  disabled={gmailBusy}
+                  className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
+                >
+                  Disconnect
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium">Connect Gmail</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Find subscriptions from your receipt emails instead of adding them
+                  by hand. Read-only, and nothing is added without your approval.
+                </p>
+              </div>
+              <Button onClick={handleConnectGmail} disabled={gmailBusy} className="shrink-0">
+                Connect
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Section 3 — Account actions */}
       <div className="rounded-2xl bg-card shadow-md p-6 space-y-4">

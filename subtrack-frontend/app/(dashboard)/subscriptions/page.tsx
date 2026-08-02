@@ -65,8 +65,8 @@ export default function SubscriptionsPage() {
     try {
       const data = await getSubscriptions(session.access_token)
       setSubscriptions(data)
-    } catch (e: any) {
-      setError(e?.message ?? 'Failed to load subscriptions.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load subscriptions.')
       toast.error('Something went wrong')
     } finally {
       setLoading(false)

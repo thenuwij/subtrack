@@ -77,6 +77,9 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
     setForm(getInitialForm())
     setExchangeRate(initialData?.exchange_rate ?? 1.0)
     setError(null)
+    // Re-init only when the edited item changes. Including getInitialForm would
+    // also fire when baseCurrency loads, wiping a form the user is typing in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialData])
 
   useEffect(() => {
@@ -136,8 +139,8 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
       })
       setForm(DEFAULT_FORM)
       onClose()
-    } catch (e: any) {
-      setError(e?.message ?? 'Something went wrong.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong.')
     } finally {
       setLoading(false)
     }

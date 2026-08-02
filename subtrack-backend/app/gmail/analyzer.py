@@ -58,6 +58,14 @@ class DetectedSubscription(BaseModel):
         description="True if the emails show this subscription was cancelled or will "
                     "not renew."
     )
+    category: Literal[
+        "streaming", "software", "cloud", "utilities", "fitness",
+        "food", "transport", "other",
+    ] = Field(
+        description="Best-fit category. Rent, phone, internet, and energy are "
+                    "'utilities'; developer/AI/productivity tools are 'software'; "
+                    "hosting is 'cloud'. Use 'other' when unsure."
+    )
     confidence: Literal["high", "medium"] = Field(
         description="high = several charges at a consistent interval and amount. "
                     "medium = plausible but thin evidence (e.g. only 1-2 charges)."

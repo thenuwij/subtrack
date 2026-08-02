@@ -2,13 +2,16 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { LayoutDashboard, CreditCard, Target, LogOut, UserCircle } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { LayoutDashboard, CreditCard, Target, LogOut, UserCircle, Inbox } from 'lucide-react'
+import { getDetected } from '@/lib/api'
 import { useCurrency } from '@/lib/context/currency'
 import type { Currency } from '@/types'
 
 const links = [
   { href: '/dashboard',     label: 'Dashboard',     icon: LayoutDashboard },
   { href: '/subscriptions', label: 'Subscriptions', icon: CreditCard },
+  { href: '/review',        label: 'Review',        icon: Inbox },
   { href: '/savings',       label: 'Savings',       icon: Target },
   { href: '/account',       label: 'Account',       icon: UserCircle },
 ]
@@ -19,6 +22,21 @@ export default function Navbar() {
   const pathname = usePathname()
   const router = useRouter()
   const { baseCurrency, setBaseCurrency, isLoading } = useCurrency()
+  const [pendingCount, setPendingCount] = useState(0)
+
+  useEffect(() => {
+    async function loadPending() {
+      const { data: { session } } = await createClient().auth.getSession()
+      if (!session) return
+      try {
+        const detected = await getDetected(session.access_token)
+        setPendingCount(detected.length)
+      } catch {
+        // A badge is not worth surfacing an error for.
+      }
+    }
+    loadPending()
+  }, [pathname])
 
   async function handleLogout() {
     await createClient().auth.signOut()
@@ -53,6 +71,11 @@ export default function Navbar() {
           >
             <Icon className="w-4 h-4 shrink-0" />
             {label}
+            {href === '/review' && pendingCount > 0 && (
+              <span className="ml-auto rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold leading-none text-primary-foreground">
+                {pendingCount}
+              </span>
+            )}
           </Link>
         ))}
       </nav>

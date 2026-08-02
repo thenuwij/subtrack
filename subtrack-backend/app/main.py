@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.config import settings
 from app.database import Base, engine
-from app.routers import subscriptions, rates, preferences, savings, agent, gmail
+from app.routers import subscriptions, rates, preferences, savings, agent, gmail, detected
 
 
 # Logging config
@@ -36,6 +36,7 @@ app.include_router(preferences.router)
 app.include_router(savings.router)
 app.include_router(agent.router)
 app.include_router(gmail.router)
+app.include_router(detected.router)
 
 @app.on_event("startup")
 def on_startup():

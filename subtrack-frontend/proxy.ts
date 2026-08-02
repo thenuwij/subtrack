@@ -36,7 +36,7 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const isAuthPage = request.nextUrl.pathname.startsWith('/login')
-  const isProtectedPage = ['/dashboard', '/subscriptions', '/savings', '/account'].some(
+  const isProtectedPage = ['/dashboard', '/subscriptions', '/review', '/savings', '/account'].some(
     path => request.nextUrl.pathname.startsWith(path)
   )
 
@@ -52,5 +52,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/subscriptions/:path*', '/savings/:path*', '/account/:path*', '/login'],
+  matcher: ['/dashboard/:path*', '/subscriptions/:path*', '/review/:path*', '/savings/:path*', '/account/:path*', '/login'],
 }

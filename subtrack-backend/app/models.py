@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, DateTime, Boolean, Enum, Text
+from sqlalchemy import Column, String, Float, DateTime, Boolean, Enum, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from app.database import Base
@@ -65,6 +65,41 @@ class GmailAccount(Base):
     refresh_token_encrypted = Column(Text, nullable=False)
     connected_at = Column(DateTime, server_default=func.now())
     last_scanned_at = Column(DateTime, nullable=True)
+    scan_status = Column(String, default="idle")      # idle | running | done | error
+    scan_error = Column(String, nullable=True)
+
+
+class DetectionStatus(str, enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    dismissed = "dismissed"
+
+
+class DetectedSubscription(Base):
+    """A subscription found in email, awaiting the user's verdict.
+
+    Nothing touches the real subscriptions table until the user approves —
+    email parsing is noisy, and one wrong entry makes the total untrustworthy.
+    """
+    __tablename__ = "detected_subscriptions"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, nullable=False, index=True)
+    merchant = Column(String, nullable=False)
+    sender_domain = Column(String, nullable=False)
+    category = Column(Enum(Category), default=Category.other)
+    cycle = Column(Enum(BillingCycle), nullable=False)
+    amount = Column(Float, nullable=False)
+    currency = Column(String, default="AUD")
+    previous_amount = Column(Float, nullable=True)
+    cancelled = Column(Boolean, default=False)
+    confidence = Column(String, default="medium")     # high | medium
+    charge_count = Column(Integer, default=0)
+    # Set when this looks like a price change to a subscription the user
+    # already tracks; approving updates that row instead of creating one.
+    existing_subscription_id = Column(UUID(as_uuid=True), nullable=True)
+    status = Column(Enum(DetectionStatus), default=DetectionStatus.pending, index=True)
+    detected_at = Column(DateTime, server_default=func.now())
+    resolved_at = Column(DateTime, nullable=True)
 
 class SavingsGoal(Base):
     __tablename__ = "savings_goals"

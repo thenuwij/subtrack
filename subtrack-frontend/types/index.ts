@@ -27,6 +27,53 @@ export interface Subscription {
   created_at: string
 }
 
+// Payload shapes for create/update calls — mirror the backend Pydantic models.
+export interface SubscriptionInput {
+  name: string
+  category: Category
+  amount: number
+  currency?: string
+  exchange_rate?: number
+  converted_amount?: number | null
+  cycle: BillingCycle
+  next_due?: string | null
+  is_active?: boolean
+}
+
+export interface SavingsGoalInput {
+  name: string
+  target_amount: number
+  currency?: string
+  current_amount?: number
+  target_date?: string | null
+  completed_at?: string | null
+}
+
+export interface GmailStatus {
+  connected: boolean
+  email_address?: string
+  connected_at?: string | null
+  last_scanned_at?: string | null
+  scan_status?: 'idle' | 'running' | 'done' | 'error'
+  scan_error?: string | null
+}
+
+export interface DetectedSubscription {
+  id: string
+  merchant: string
+  sender_domain: string
+  category: Category
+  cycle: BillingCycle
+  amount: number
+  currency: string
+  previous_amount: number | null
+  cancelled: boolean
+  confidence: 'high' | 'medium'
+  charge_count: number
+  existing_subscription_id: string | null   // set when this is a price change
+  detected_at: string
+}
+
 export type ChangeKind = 'added' | 'price_change' | 'removed'
 
 export interface SubscriptionChange {

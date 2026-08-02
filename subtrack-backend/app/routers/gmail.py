@@ -9,16 +9,21 @@ from datetime import datetime, timedelta, timezone
 os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import get_db
-from app.gmail.crypto import encrypt_token
+from app.database import SessionLocal, get_db
+from app.gmail.crypto import decrypt_token, encrypt_token
 from app.middleware.auth import verify_token
-from app.models import GmailAccount
+from app.models import (
+    DetectedSubscription,
+    DetectionStatus,
+    GmailAccount,
+    Subscription,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +107,8 @@ def gmail_status(
         "email_address": account.email_address,
         "connected_at": account.connected_at.isoformat() if account.connected_at else None,
         "last_scanned_at": account.last_scanned_at.isoformat() if account.last_scanned_at else None,
+        "scan_status": account.scan_status or "idle",
+        "scan_error": account.scan_error,
     }
 
 
@@ -172,6 +179,136 @@ def gmail_callback(code: str, state: str, db: Session = Depends(get_db)):
 
     frontend = settings.allowed_origins.split(",")[0]
     return RedirectResponse(f"{frontend}/account?gmail=connected")
+
+
+AMOUNT_TOLERANCE = 0.05  # ignore sub-5-cent differences (rounding, FX wobble)
+
+
+def _run_scan(user_id: str):
+    """The scan itself. Runs as a background task with its own DB session —
+    the request that started it has long since returned."""
+    from datetime import datetime
+
+    from app.gmail.analyzer import analyze
+    from app.gmail.scanner import scan
+
+    db = SessionLocal()
+    try:
+        account = db.query(GmailAccount).filter(GmailAccount.user_id == user_id).first()
+        if not account:
+            return
+
+        try:
+            candidates = scan(decrypt_token(account.refresh_token_encrypted),
+                              months=6, max_messages=300)
+            detected = analyze(candidates)
+        except Exception as exc:
+            logger.error("Scan failed for %s: %s", user_id, exc)
+            account.scan_status = "error"
+            account.scan_error = str(exc)[:500]
+            db.commit()
+            return
+
+        subscriptions = db.query(Subscription).filter(
+            Subscription.user_id == user_id, Subscription.is_active == True  # noqa: E712
+        ).all()
+        subs_by_name = {s.name.lower().strip(): s for s in subscriptions}
+
+        existing_detections = db.query(DetectedSubscription).filter(
+            DetectedSubscription.user_id == user_id
+        ).all()
+        # One merchant+domain can hold several detections — Apple bills three
+        # subscriptions from one address — so the key maps to a list and the
+        # amount disambiguates.
+        detections_by_key: dict = {}
+        for d in existing_detections:
+            detections_by_key.setdefault(
+                (d.merchant.lower().strip(), d.sender_domain), []
+            ).append(d)
+
+        def match_previous(found):
+            group = detections_by_key.get(
+                (found.merchant.lower().strip(), found.sender_domain), []
+            )
+            # Same amount = same detection, regardless of status.
+            for d in group:
+                if abs(d.amount - found.amount) <= AMOUNT_TOLERANCE:
+                    return d
+            # A pending detection whose amount equals the new previous_amount
+            # is the same subscription after a price change — update, not dupe.
+            if found.previous_amount is not None:
+                for d in group:
+                    if (d.status == DetectionStatus.pending
+                            and abs(d.amount - found.previous_amount) <= AMOUNT_TOLERANCE):
+                        return d
+            # A lone entry for this merchant is safe to refresh in place.
+            if len(group) == 1 and group[0].status == DetectionStatus.pending:
+                return group[0]
+            return None
+
+        for found in detected:
+            previous = match_previous(found)
+
+            # Dismissed means "stop suggesting this" — a rescan must not nag.
+            # Approved means it's already a real subscription; price changes to
+            # it are handled through the tracked-subscription match below.
+            if previous is not None and previous.status != DetectionStatus.pending:
+                continue
+
+            tracked = subs_by_name.get(found.merchant.lower().strip())
+            existing_sub_id = None
+            if tracked is not None:
+                if abs(tracked.amount - found.amount) <= AMOUNT_TOLERANCE:
+                    continue  # already tracked at this price — nothing to review
+                existing_sub_id = tracked.id  # tracked, but the price moved
+
+            if previous is not None:
+                row = previous  # refresh the pending suggestion in place
+            else:
+                row = DetectedSubscription(user_id=user_id)
+                db.add(row)
+
+            row.merchant = found.merchant
+            row.sender_domain = found.sender_domain
+            row.category = found.category
+            row.cycle = found.cycle
+            row.amount = found.amount
+            row.currency = found.currency
+            row.previous_amount = found.previous_amount
+            row.cancelled = found.cancelled
+            row.confidence = found.confidence
+            row.charge_count = found.charge_count
+            row.existing_subscription_id = existing_sub_id
+            row.status = DetectionStatus.pending
+            row.resolved_at = None
+
+        account.scan_status = "done"
+        account.scan_error = None
+        account.last_scanned_at = datetime.utcnow()
+        db.commit()
+        logger.info("Scan complete for %s: %d candidates", user_id, len(detected))
+    finally:
+        db.close()
+
+
+@router.post("/scan")
+def start_scan(
+    background: BackgroundTasks,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    account = db.query(GmailAccount).filter(GmailAccount.user_id == user_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="No Gmail account connected")
+    if account.scan_status == "running":
+        return {"status": "running"}
+
+    account.scan_status = "running"
+    account.scan_error = None
+    db.commit()
+
+    background.add_task(_run_scan, user_id)
+    return {"status": "running"}
 
 
 @router.delete("/disconnect")

@@ -1,3 +1,5 @@
+import type { SavingsGoalInput, SubscriptionInput } from '@/types'
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 async function getHeaders(token: string) {
@@ -16,7 +18,7 @@ export async function getSubscriptions(token: string) {
   return res.json()
 }
 
-export async function createSubscription(token: string, data: any) {
+export async function createSubscription(token: string, data: SubscriptionInput) {
   const res = await fetch(`${API_URL}/subscriptions/`, {
     method: 'POST',
     headers: await getHeaders(token),
@@ -40,6 +42,73 @@ export async function getSubscriptionChanges(token: string, days: number = 30) {
     headers: await getHeaders(token),
   })
   if (!res.ok) throw new Error('Failed to fetch subscription changes')
+  return res.json()
+}
+
+// Gmail
+export async function getGmailStatus(token: string) {
+  const res = await fetch(`${API_URL}/gmail/status`, {
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to fetch Gmail status')
+  return res.json()
+}
+
+export async function getGmailConnectUrl(token: string) {
+  const res = await fetch(`${API_URL}/gmail/connect`, {
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to start Gmail connection')
+  return res.json()
+}
+
+export async function startGmailScan(token: string) {
+  const res = await fetch(`${API_URL}/gmail/scan`, {
+    method: 'POST',
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to start scan')
+  return res.json()
+}
+
+export async function disconnectGmail(token: string) {
+  const res = await fetch(`${API_URL}/gmail/disconnect`, {
+    method: 'DELETE',
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to disconnect Gmail')
+  return res.json()
+}
+
+// Detected subscriptions (review queue)
+export async function getDetected(token: string) {
+  const res = await fetch(`${API_URL}/detected/`, {
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to fetch detected subscriptions')
+  return res.json()
+}
+
+export async function approveDetected(
+  token: string,
+  id: string,
+  overrides: { name?: string; category?: string; amount?: number; cycle?: string } = {}
+) {
+  const res = await fetch(`${API_URL}/detected/${id}/approve`, {
+    method: 'POST',
+    headers: await getHeaders(token),
+    body: JSON.stringify(overrides),
+  })
+  if (!res.ok) throw new Error('Failed to approve')
+  return res.json()
+}
+
+export async function dismissDetected(token: string, id: string) {
+  const res = await fetch(`${API_URL}/detected/${id}/dismiss`, {
+    method: 'POST',
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to dismiss')
   return res.json()
 }
 
@@ -75,7 +144,7 @@ export async function updatePreferences(
   return res.json()
 }
 
-export async function updateSubscription(token: string, id: string, data: any) {
+export async function updateSubscription(token: string, id: string, data: Partial<SubscriptionInput>) {
   const res = await fetch(`${API_URL}/subscriptions/${id}`, {
     method: 'PATCH',
     headers: await getHeaders(token),
@@ -94,7 +163,7 @@ export async function getSavingsGoals(token: string) {
   return res.json()
 }
 
-export async function createSavingsGoal(token: string, data: any) {
+export async function createSavingsGoal(token: string, data: SavingsGoalInput) {
   const res = await fetch(`${API_URL}/savings/`, {
     method: 'POST',
     headers: await getHeaders(token),
@@ -104,7 +173,7 @@ export async function createSavingsGoal(token: string, data: any) {
   return res.json()
 }
 
-export async function updateSavingsGoal(token: string, id: string, data: any) {
+export async function updateSavingsGoal(token: string, id: string, data: Partial<SavingsGoalInput>) {
   const res = await fetch(`${API_URL}/savings/${id}`, {
     method: 'PATCH',
     headers: await getHeaders(token),
