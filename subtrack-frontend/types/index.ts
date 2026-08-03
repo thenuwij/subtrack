@@ -20,6 +20,7 @@ export interface Subscription {
   amount: number                   // what YOU pay (your share of a split bill)
   full_amount: number | null       // the whole bill, when shared; null = you pay it all
   share_ratio: number              // amount = full_amount * share_ratio
+  split_mode: 'full' | 'ratio' | 'fixed'  // fixed shares don't rescale when the bill changes
   currency: string
   exchange_rate: number
   converted_amount: number | null  // null for legacy entries
@@ -42,6 +43,7 @@ export interface SubscriptionInput {
   is_active?: boolean
   full_amount?: number | null
   share_ratio?: number
+  share_amount?: number
 }
 
 export interface SavingsGoalInput {
@@ -74,7 +76,9 @@ export interface DetectedSubscription {
   cancelled: boolean
   confidence: 'high' | 'medium'
   charge_count: number
-  existing_subscription_id: string | null   // set when this is a price change
+  existing_subscription_id: string | null
+  current_amount: number | null                       // what you pay today, if tracked
+  current_split_mode: 'full' | 'ratio' | 'fixed' | null   // set when this is a price change
   detected_at: string
 }
 

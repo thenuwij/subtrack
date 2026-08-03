@@ -26,7 +26,8 @@ interface FormState {
   cycle: BillingCycle
   next_due: string
   is_active: boolean
-  share_ratio: number   // 1 = you pay the whole bill
+  share_ratio: number     // equal split; scales if the bill changes
+  share_amount: string    // agreed uneven amount; pinned when the bill changes
 }
 
 interface Props {
@@ -49,6 +50,7 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
     next_due: today,
     is_active: true,
     share_ratio: 1,
+    share_amount: '',
   }
 
   // When initialData changes (modal opens for edit), pre-fill the form
@@ -64,7 +66,9 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
         ? new Date(initialData.next_due).toISOString().split('T')[0]
         : '',
       is_active: initialData.is_active,
-      share_ratio: initialData.share_ratio ?? 1,
+      share_ratio: initialData.split_mode === 'ratio' ? initialData.share_ratio : 1,
+      share_amount:
+        initialData.split_mode === 'fixed' ? initialData.amount.toString() : '',
     }
   }
 
@@ -111,11 +115,17 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
   }, [form.currency, baseCurrency])
 
   const amount = parseFloat(form.amount)
-  const isShared = form.share_ratio < 1
+  // An exact amount is an agreed uneven share (rent split 320/320/410) and is
+  // pinned; a fraction is an equal split that scales with the bill.
+  const fixedShare = parseFloat(form.share_amount)
+  const hasFixed = Number.isFinite(fixedShare) && fixedShare > 0 && fixedShare < amount
+  const isShared = hasFixed || form.share_ratio < 1
   // What the user actually pays — their share of the bill entered above.
-  const myAmount = !isNaN(amount)
-    ? parseFloat((amount * form.share_ratio).toFixed(2))
-    : amount
+  const myAmount = hasFixed
+    ? fixedShare
+    : !isNaN(amount)
+      ? parseFloat((amount * form.share_ratio).toFixed(2))
+      : amount
   const convertedAmount = !isNaN(myAmount) && myAmount > 0
     ? parseFloat((myAmount * exchangeRate).toFixed(2))
     : null
@@ -141,7 +151,8 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
         // Shared bill: send the whole cost and the portion this user pays, so
         // future email scans compare against the real bill, not the share.
         full_amount: isShared ? amount : null,
-        share_ratio: form.share_ratio,
+        share_ratio: hasFixed ? undefined : form.share_ratio,
+        share_amount: hasFixed ? fixedShare : undefined,
         currency: form.currency,
         exchange_rate: exchangeRate,
         converted_amount: form.currency === baseCurrency ? myAmount : convertedAmount,
@@ -220,9 +231,12 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
                   key={option.label}
                   type="button"
                   disabled={loading}
-                  onClick={() => set('share_ratio', option.ratio)}
+                  onClick={() => {
+                    set('share_ratio', option.ratio)
+                    set('share_amount', '')
+                  }}
                   className={`rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
-                    Math.abs(form.share_ratio - option.ratio) < 0.001
+                    Math.abs(form.share_ratio - option.ratio) < 0.001 && !hasFixed
                       ? 'border-primary bg-primary/10 text-primary'
                       : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'
                   }`}
@@ -230,6 +244,19 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
                   {option.label}
                 </button>
               ))}
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-muted-foreground">or exactly</span>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="320"
+                  value={form.share_amount}
+                  onChange={e => set('share_amount', e.target.value)}
+                  disabled={loading}
+                  className="h-8 w-24 text-xs"
+                />
+              </div>
             </div>
             {isShared && !isNaN(amount) && amount > 0 && (
               <p className="text-xs text-muted-foreground">
@@ -238,6 +265,9 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
                   {formatCurrency(myAmount, form.currency)}
                 </span>{' '}
                 of {formatCurrency(amount, form.currency)} / {form.cycle}
+                {hasFixed
+                  ? ' — stays the same if the bill changes'
+                  : ' — scales if the bill changes'}
               </p>
             )}
           </div>

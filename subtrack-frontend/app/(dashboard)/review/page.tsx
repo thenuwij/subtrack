@@ -66,13 +66,17 @@ export default function ReviewPage() {
     setCustom(prev => ({ ...prev, [id]: '' }))
   }
 
-  function setCustomShare(id: string, value: string, billed: number) {
+  // An exact amount is an agreed uneven share (rent split 320/320/410). It's
+  // sent as share_amount, not a ratio, so a later increase to the bill doesn't
+  // silently rescale what you pay.
+  function setCustomShare(id: string, value: string) {
     setCustom(prev => ({ ...prev, [id]: value }))
-    const mine = parseFloat(value)
-    setShares(prev => ({
-      ...prev,
-      [id]: Number.isFinite(mine) && mine > 0 && mine <= billed ? mine / billed : 1,
-    }))
+    setShares(prev => ({ ...prev, [id]: 1 }))
+  }
+
+  function fixedShare(id: string, billed: number): number | null {
+    const mine = parseFloat(custom[id] ?? '')
+    return Number.isFinite(mine) && mine > 0 && mine < billed ? mine : null
   }
 
   // While a scan runs there's nothing to show until it finishes, so poll for it.
@@ -88,10 +92,20 @@ export default function ReviewPage() {
     setBusy(id)
     try {
       if (action === 'approve') {
-        // Only send a ratio when the bill is actually shared — omitting it
+        // Only send a split when the bill is actually shared — omitting both
         // stores the full amount, which is the common case.
+        const item = items.find(i => i.id === id)
+        const fixed = item ? fixedShare(id, item.amount) : null
         const ratio = shares[id]
-        await approveDetected(t, id, ratio && ratio < 1 ? { share_ratio: ratio } : {})
+        await approveDetected(
+          t,
+          id,
+          fixed !== null
+            ? { share_amount: fixed }
+            : ratio && ratio < 1
+              ? { share_ratio: ratio }
+              : {}
+        )
       } else await dismissDetected(t, id)
       // Drop it locally rather than refetching — the row is gone either way.
       setItems(prev => prev.filter(i => i.id !== id))
@@ -195,8 +209,10 @@ export default function ReviewPage() {
           <div className="space-y-3">
             {items.map(item => {
               const ratio = shares[item.id] ?? 1
-              const myAmount = Math.round(item.amount * ratio * 100) / 100
-              const isShared = ratio < 1
+              const fixed = fixedShare(item.id, item.amount)
+              const myAmount =
+                fixed ?? Math.round(item.amount * ratio * 100) / 100
+              const isShared = fixed !== null || ratio < 1
               const monthly = toMonthly(myAmount, item.cycle)
               const isPriceChange = item.existing_subscription_id !== null
               const rose =
@@ -272,6 +288,20 @@ export default function ReviewPage() {
                         </p>
                       )}
 
+                      {/* An agreed uneven split doesn't rescale on its own —
+                          who covers an increase is for the housemates to
+                          decide, so say what happens if they do nothing. */}
+                      {isPriceChange && item.current_split_mode === 'fixed' && (
+                        <p className="text-xs text-muted-foreground">
+                          You currently pay{' '}
+                          <span className="font-medium text-foreground">
+                            {formatCurrency(item.current_amount ?? 0, item.currency)}
+                          </span>{' '}
+                          of this. Approving keeps that unless you set a new
+                          amount below.
+                        </p>
+                      )}
+
                       {/* Receipts show the whole bill. Shared costs — rent,
                           household utilities — need only the user's portion. */}
                       <div className="flex flex-wrap items-center gap-1.5 pt-1">
@@ -306,9 +336,7 @@ export default function ReviewPage() {
                             inputMode="decimal"
                             placeholder="exact"
                             value={custom[item.id] ?? ''}
-                            onChange={e =>
-                              setCustomShare(item.id, e.target.value, item.amount)
-                            }
+                            onChange={e => setCustomShare(item.id, e.target.value)}
                             className="w-20 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
                           />
                         </div>

@@ -98,6 +98,7 @@ export async function approveDetected(
     amount?: number
     cycle?: string
     share_ratio?: number
+    share_amount?: number
   } = {}
 ) {
   const res = await fetch(`${API_URL}/detected/${id}/approve`, {

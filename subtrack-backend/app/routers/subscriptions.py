@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import NamedTuple, Optional
 from datetime import datetime
 from uuid import UUID
 from app.database import get_db
@@ -32,16 +32,39 @@ def log_change(db: Session, sub: Subscription, kind: ChangeKind,
         currency=sub.currency,
     ))
 
-def apply_share(full_amount: Optional[float], share_ratio: Optional[float],
-                fallback_amount: float) -> tuple[float, Optional[float], float]:
-    """Resolve (amount_the_user_pays, full_amount, share_ratio).
+class Split(NamedTuple):
+    amount: float                  # what this user pays — stored as `amount`
+    full_amount: Optional[float]   # the whole bill, or None when unsplit
+    share_ratio: float
+    split_mode: str                # full | ratio | fixed
 
-    Callers send the whole bill plus the user's share; what gets stored as
-    `amount` is their portion, so every total downstream needs no special case.
+
+def resolve_split(billed: float, share_ratio: Optional[float] = None,
+                  share_amount: Optional[float] = None) -> Split:
+    """Work out the user's portion of a bill.
+
+    `share_amount` (an agreed uneven amount, e.g. 320 of a 320/320/410 rent)
+    takes precedence over `share_ratio` (an equal split). They behave
+    differently when the bill later changes — see Subscription.split_mode.
     """
-    if full_amount is None or share_ratio is None or share_ratio >= 1.0:
-        return fallback_amount, None, 1.0
-    return round(full_amount * share_ratio, 2), full_amount, share_ratio
+    if share_amount is not None and 0 < share_amount < billed:
+        return Split(round(share_amount, 2), billed, share_amount / billed, "fixed")
+    if share_ratio is not None and 0 < share_ratio < 1.0:
+        return Split(round(billed * share_ratio, 2), billed, share_ratio, "ratio")
+    return Split(billed, None, 1.0, "full")
+
+
+def rebill(sub: Subscription, new_billed: float) -> Split:
+    """Re-apply an existing split after the underlying bill changed.
+
+    An equal split scales with the bill. A fixed amount does not — the user
+    agreed to pay that figure, and who absorbs an increase is theirs to decide.
+    """
+    if sub.split_mode == "ratio" and sub.share_ratio:
+        return resolve_split(new_billed, share_ratio=sub.share_ratio)
+    if sub.split_mode == "fixed":
+        return Split(sub.amount, new_billed, sub.amount / new_billed if new_billed else 1.0, "fixed")
+    return resolve_split(new_billed)
 
 
 class SubscriptionCreate(BaseModel):
@@ -57,6 +80,7 @@ class SubscriptionCreate(BaseModel):
     # `amount` is then derived and represents only what this user pays.
     full_amount: Optional[float] = None
     share_ratio: Optional[float] = Field(default=None, gt=0, le=1)
+    share_amount: Optional[float] = Field(default=None, gt=0)
 
 class SubscriptionUpdate(BaseModel):
     name: Optional[str] = None
@@ -70,7 +94,8 @@ class SubscriptionUpdate(BaseModel):
     is_active: Optional[bool] = None
     full_amount: Optional[float] = None
     share_ratio: Optional[float] = Field(default=None, gt=0, le=1)
-    
+    share_amount: Optional[float] = Field(default=None, gt=0)
+
 @router.get("/")
 def get_subscriptions(
     user_id: str = Depends(verify_token),
@@ -117,15 +142,18 @@ def create_subscription(
     db: Session = Depends(get_db)
 ):
     fields = data.model_dump()
-    amount, full_amount, share_ratio = apply_share(
-        fields.pop("full_amount"), fields.pop("share_ratio"), fields["amount"]
-    )
-    fields["amount"] = amount
+    # The caller sends the whole bill plus how it's split; `amount` ends up as
+    # this user's portion so every downstream total needs no special case.
+    billed = fields.pop("full_amount") or fields["amount"]
+    split = resolve_split(billed, fields.pop("share_ratio"), fields.pop("share_amount"))
+    fields["amount"] = split.amount
     if fields.get("converted_amount") is None:
-        fields["converted_amount"] = amount
+        fields["converted_amount"] = split.amount
 
     sub = Subscription(**fields, user_id=user_id,
-                       full_amount=full_amount, share_ratio=share_ratio)
+                       full_amount=split.full_amount,
+                       share_ratio=split.share_ratio,
+                       split_mode=split.split_mode)
     db.add(sub)
     db.flush()   # need sub.id before logging the change
     log_change(db, sub, ChangeKind.added, None, monthly_equivalent(sub.amount, sub.cycle))
@@ -152,15 +180,15 @@ def update_subscription(
     fields = data.model_dump(exclude_none=True)
     # A split can be edited independently of the amount, so resolve against
     # whatever the caller didn't send.
-    if "full_amount" in fields or "share_ratio" in fields:
-        full_amount = fields.pop("full_amount", sub.full_amount)
-        share_ratio = fields.pop("share_ratio", sub.share_ratio)
-        amount, full_amount, share_ratio = apply_share(
-            full_amount, share_ratio, fields.get("amount", sub.amount)
-        )
-        fields["amount"] = amount
-        sub.full_amount = full_amount
-        sub.share_ratio = share_ratio
+    if {"full_amount", "share_ratio", "share_amount"} & fields.keys():
+        billed = fields.pop("full_amount", None) or fields.get("amount") \
+            or sub.full_amount or sub.amount
+        split = resolve_split(billed, fields.pop("share_ratio", None),
+                              fields.pop("share_amount", None))
+        fields["amount"] = split.amount
+        sub.full_amount = split.full_amount
+        sub.share_ratio = split.share_ratio
+        sub.split_mode = split.split_mode
 
     for key, value in fields.items():
         setattr(sub, key, value)

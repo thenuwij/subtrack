@@ -35,6 +35,14 @@ class Subscription(Base):
     # on every single scan.
     full_amount = Column(Float, nullable=True)
     share_ratio = Column(Float, default=1.0)          # amount = full_amount * share_ratio
+    # How the share behaves when the bill changes:
+    #   full  — no split; the user pays the whole bill
+    #   ratio — an equal split (a third of the internet bill). A price rise
+    #           scales the user's share automatically.
+    #   fixed — an agreed uneven amount (rent split 320/320/410). A price rise
+    #           must NOT silently rescale it; the housemates decide who absorbs
+    #           the increase, so it surfaces for review instead.
+    split_mode = Column(String, default="full")
     currency = Column(String, default="AUD")
     exchange_rate = Column(Float, default=1.0)        # rate used at time of entry
     converted_amount = Column(Float, nullable=True)   # amount in user's base currency
