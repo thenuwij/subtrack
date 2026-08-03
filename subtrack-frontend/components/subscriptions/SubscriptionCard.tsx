@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Trash2, Pencil } from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
+import { formatCategory } from '@/lib/utils/categories'
 
 const CATEGORY_DOT: Record<string, string> = {
   streaming:  'bg-purple-500',
@@ -56,7 +57,7 @@ export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
   const dotClass = CATEGORY_DOT[subscription.category] ?? 'bg-muted-foreground'
 
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3 hover:bg-muted/40 transition-colors group">
+    <div className="flex flex-col gap-3 px-4 py-3 transition-colors hover:bg-muted/40 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
 
       {/* Left — dot + name + subtitle */}
       <div className="flex items-center gap-3 flex-1 min-w-0">
@@ -64,7 +65,7 @@ export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
         <div className="min-w-0">
           <p className="font-medium text-sm truncate leading-tight">{subscription.name}</p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {subscription.category}
+            {formatCategory(subscription.category)}
             {nextDate && <span className="ml-1.5">· next {nextDate}</span>}
             {subscription.full_amount != null && (
               <span className="ml-1.5">
@@ -77,7 +78,7 @@ export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
       </div>
 
       {/* Right — amount + actions */}
-      <div className="shrink-0 flex items-center gap-3">
+      <div className="flex shrink-0 items-center justify-between gap-3 pl-5 sm:justify-start sm:pl-0">
         <div className="text-right">
           <p className="font-semibold text-sm tabular-nums leading-tight">
             {formatCurrency(subscription.amount, subscription.currency)}
@@ -93,22 +94,23 @@ export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
         </div>
 
         {!confirming ? (
-          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex gap-1">
             <Button
               variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-foreground hover:bg-muted"
+              size="sm"
+              className="h-7 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={() => onEdit(subscription)}
-              aria-label="Edit subscription"
+              aria-label="Edit recurring payment"
             >
-              <Pencil className="w-3.5 h-3.5" />
+              <Pencil className="mr-1 h-3.5 w-3.5" />
+              Edit
             </Button>
             <Button
               variant="ghost"
               size="icon"
               className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
               onClick={() => setConfirming(true)}
-              aria-label="Delete subscription"
+              aria-label="Delete recurring payment"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </Button>

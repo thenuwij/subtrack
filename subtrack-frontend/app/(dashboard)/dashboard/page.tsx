@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ArrowDownRight, ArrowUpRight, CreditCard, Minus } from 'lucide-react'
+import { ArrowDownRight, ArrowRight, ArrowUpRight, ChevronDown, ChevronUp, CreditCard, Mail, Minus } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { getSubscriptions, getSubscriptionChanges, getPreferences } from '@/lib/api'
-import type { Subscription, SubscriptionChange } from '@/types'
+import { getGmailStatus, getSubscriptions, getSubscriptionChanges, getPreferences } from '@/lib/api'
+import type { GmailStatus, Subscription, SubscriptionChange } from '@/types'
 import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
+import { formatCategory } from '@/lib/utils/categories'
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
@@ -38,6 +39,9 @@ export default function DashboardPage() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
   const [changes, setChanges] = useState<SubscriptionChange[]>([])
   const [monthlyIncome, setMonthlyIncome] = useState<number | null>(null)
+  const [gmail, setGmail] = useState<GmailStatus | null>(null)
+  const [changesExpanded, setChangesExpanded] = useState(false)
+  const [spendingExpanded, setSpendingExpanded] = useState(false)
   const [loading, setLoading] = useState(true)
   const { baseCurrency, convertAmount } = useCurrency()
 
@@ -49,15 +53,17 @@ export default function DashboardPage() {
         if (!session) return
 
         const token = session.access_token
-        const [subs, chgs, prefs] = await Promise.all([
+        const [subs, chgs, prefs, gmailStatus] = await Promise.all([
           getSubscriptions(token),
           getSubscriptionChanges(token, 30),
           getPreferences(token),
+          getGmailStatus(token).catch(() => null),
         ])
 
         setSubscriptions(subs)
         setChanges(chgs)
         setMonthlyIncome(prefs.monthly_income ?? null)
+        setGmail(gmailStatus)
       } finally {
         setLoading(false)
       }
@@ -114,11 +120,11 @@ export default function DashboardPage() {
           <div className="space-y-2">
             <p className="text-sm font-medium text-primary">Overview</p>
             <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-              What you&apos;re committed to
+              Keep track of your recurring payments
             </h1>
             <p className="max-w-2xl text-sm text-muted-foreground sm:text-base">
-              Every recurring charge you&apos;re signed up for, what it adds up to, and what
-              changed since last month.
+              Subscriptions, rent, bills, memberships, and every other payment that keeps
+              coming back.
             </p>
           </div>
 
@@ -134,11 +140,20 @@ export default function DashboardPage() {
 
         {/* The headline number */}
         <section className="rounded-2xl bg-card p-6 shadow-md">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <CreditCard className="h-5 w-5" />
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <CreditCard className="h-5 w-5" />
+              </div>
+              <p className="text-sm font-medium text-foreground">Monthly commitment</p>
             </div>
-            <p className="text-sm font-medium text-foreground">Monthly subscriptions</p>
+            <Link
+              href="/subscriptions"
+              className="inline-flex items-center gap-1.5 self-start rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+            >
+              Manage payments
+              <ArrowRight className="h-4 w-4" />
+            </Link>
           </div>
 
           <p className="mt-4 text-5xl font-bold tracking-tight tabular-nums text-foreground">
@@ -150,7 +165,7 @@ export default function DashboardPage() {
               {formatCurrency(monthlyTotal * 12, baseCurrency)} a year
             </span>
             <span>
-              {subscriptions.length} active subscription{subscriptions.length === 1 ? '' : 's'}
+              {subscriptions.length} active payment{subscriptions.length === 1 ? '' : 's'}
             </span>
             {shareOfIncome !== null ? (
               <span className={getShareTone(shareOfIncome)}>
@@ -163,6 +178,33 @@ export default function DashboardPage() {
             )}
           </div>
         </section>
+
+        {gmail && (
+          <section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 shadow-md sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Mail className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">
+                  {gmail.connected ? 'Your inbox is connected' : 'Find recurring payments from your email'}
+                </p>
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  {gmail.connected
+                    ? 'Review anything Subtrack finds before it is added to your list.'
+                    : 'Connect Gmail to scan receipt emails. It is read-only, and nothing is added without your approval.'}
+                </p>
+              </div>
+            </div>
+            <Link
+              href={gmail.connected ? '/review' : '/account#inbox'}
+              className="inline-flex shrink-0 items-center gap-1.5 self-start text-sm font-medium text-primary hover:underline sm:self-center"
+            >
+              {gmail.connected ? 'Review inbox' : 'Connect Gmail'}
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </section>
+        )}
 
         {/* What changed */}
         <section className="rounded-2xl bg-card p-6 shadow-md">
@@ -197,13 +239,13 @@ export default function DashboardPage() {
               <div className="text-center">
                 <p className="text-sm font-medium text-foreground">Nothing changed</p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Your subscriptions cost the same as they did last month.
+                  Your recurring payments cost the same as they did last month.
                 </p>
               </div>
             </div>
           ) : (
-            <div className="space-y-3">
-              {changes.map((change) => {
+            <div id="dashboard-changes-list" className="space-y-3">
+              {(changesExpanded ? changes : changes.slice(0, 3)).map((change) => {
                 const delta = convertAmount(change.delta, change.currency)
                 const isIncrease = delta > 0
 
@@ -266,6 +308,21 @@ export default function DashboardPage() {
                   </div>
                 )
               })}
+              {changes.length > 3 && (
+                <button
+                  type="button"
+                  aria-expanded={changesExpanded}
+                  aria-controls="dashboard-changes-list"
+                  onClick={() => setChangesExpanded(value => !value)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  {changesExpanded ? (
+                    <><ChevronUp className="h-4 w-4" /> Show less</>
+                  ) : (
+                    <><ChevronDown className="h-4 w-4" /> Show {changes.length - 3} more</>
+                  )}
+                </button>
+              )}
             </div>
           )}
         </section>
@@ -273,27 +330,27 @@ export default function DashboardPage() {
         {/* Where the money actually goes */}
         <section className="rounded-2xl bg-card p-6 shadow-md">
           <div className="mb-5">
-            <h2 className="text-lg font-semibold text-foreground">Biggest first</h2>
+            <h2 className="text-lg font-semibold text-foreground">Where your money goes</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Ranked by what each one costs you over a year.
+              Your highest recurring costs, shown as a share of your total.
             </p>
           </div>
 
           {ranked.length === 0 ? (
             <div className="flex min-h-[180px] items-center justify-center rounded-xl border border-dashed border-border bg-muted/30">
               <div className="text-center">
-                <p className="text-sm font-medium text-foreground">No subscriptions yet</p>
+                <p className="text-sm font-medium text-foreground">No recurring payments yet</p>
                 <Link
                   href="/subscriptions"
                   className="mt-1 inline-block text-sm text-primary underline underline-offset-4"
                 >
-                  Add your first one
+                  Add your first payment
                 </Link>
               </div>
             </div>
           ) : (
-            <div className="space-y-3">
-              {ranked.map(({ subscription, monthly }) => {
+            <div id="dashboard-spending-list" className="space-y-3">
+              {(spendingExpanded ? ranked : ranked.slice(0, 5)).map(({ subscription, monthly }) => {
                 const share = monthlyTotal > 0 ? (monthly / monthlyTotal) * 100 : 0
 
                 return (
@@ -307,7 +364,7 @@ export default function DashboardPage() {
                           {subscription.name}
                         </p>
                         <p className="text-xs capitalize text-muted-foreground">
-                          {subscription.category} · {subscription.cycle}
+                          {formatCategory(subscription.category)} · {subscription.cycle}
                           {subscription.currency !== baseCurrency &&
                             ` · ${formatCurrency(subscription.amount, subscription.currency)}`}
                         </p>
@@ -331,11 +388,26 @@ export default function DashboardPage() {
                       />
                     </div>
                     <p className="mt-1.5 text-xs tabular-nums text-muted-foreground">
-                      {share.toFixed(0)}% of your subscription spend
+                      {share.toFixed(0)}% of your recurring spend
                     </p>
                   </div>
                 )
               })}
+              {ranked.length > 5 && (
+                <button
+                  type="button"
+                  aria-expanded={spendingExpanded}
+                  aria-controls="dashboard-spending-list"
+                  onClick={() => setSpendingExpanded(value => !value)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  {spendingExpanded ? (
+                    <><ChevronUp className="h-4 w-4" /> Show less</>
+                  ) : (
+                    <><ChevronDown className="h-4 w-4" /> Show all {ranked.length}</>
+                  )}
+                </button>
+              )}
             </div>
           )}
         </section>

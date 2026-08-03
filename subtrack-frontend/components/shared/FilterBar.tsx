@@ -1,7 +1,8 @@
 'use client'
 
-import { Search, LayoutGrid, ArrowUp, ArrowDown } from 'lucide-react'
+import { Search, LayoutGrid, ArrowUp, ArrowDown, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import { formatCategory } from '@/lib/utils/categories'
 
 type Period = 'all' | 'day' | 'week' | 'month'
 
@@ -22,6 +23,7 @@ interface FilterBarProps {
   totalLabel: string
   searchQuery: string
   onSearchChange: (q: string) => void
+  onClearFilters: () => void
 }
 
 const PERIODS: { value: Period; label: string }[] = [
@@ -48,7 +50,10 @@ export function FilterBar({
   totalLabel,
   searchQuery,
   onSearchChange,
+  onClearFilters,
 }: FilterBarProps) {
+  const hasFilters = Boolean(searchQuery || selectedCategory || period !== 'all' || fromDate || toDate)
+
   return (
     <div className="flex flex-col gap-3">
 
@@ -89,7 +94,7 @@ export function FilterBar({
                   : 'bg-muted text-muted-foreground hover:bg-muted/70'
               }`}
             >
-              {cat}
+              {formatCategory(cat)}
             </button>
           ))}
         </div>
@@ -170,6 +175,17 @@ export function FilterBar({
           <LayoutGrid className="w-3.5 h-3.5" />
           Group
         </button>
+
+        {hasFilters && (
+          <button
+            type="button"
+            onClick={onClearFilters}
+            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+            Clear filters
+          </button>
+        )}
 
       </div>
 

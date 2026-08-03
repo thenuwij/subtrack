@@ -92,18 +92,19 @@ export function SavingsCard({ goal, onDelete, onEdit, onComplete }: Props) {
                 <>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground hover:bg-muted"
+                    size="sm"
+                    className="h-7 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
                     onClick={() => onEdit(goal)}
                     aria-label="Edit goal"
                   >
-                    <Pencil className="w-3.5 h-3.5" />
+                    <Pencil className="mr-1 w-3.5 h-3.5" />
+                    Edit
                   </Button>
                   {!isCompleted && (
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-primary hover:bg-primary/10"
+                      className="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-primary/10"
                       onClick={handleComplete}
                       disabled={completing}
                       aria-label="Mark as complete"
@@ -114,7 +115,7 @@ export function SavingsCard({ goal, onDelete, onEdit, onComplete }: Props) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                     onClick={() => setConfirming(true)}
                     aria-label="Delete goal"
                   >

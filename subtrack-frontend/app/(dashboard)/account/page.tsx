@@ -16,6 +16,7 @@ import type { GmailStatus } from '@/types'
 import type { User } from '@supabase/supabase-js'
 import type { Currency } from '@/types'
 import { Button } from '@/components/ui/button'
+import { toast } from 'sonner'
 
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
 
@@ -27,6 +28,7 @@ export default function AccountPage() {
   const [incomeStatus, setIncomeStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [gmail, setGmail] = useState<GmailStatus | null>(null)
   const [gmailBusy, setGmailBusy] = useState(false)
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const { baseCurrency, setBaseCurrency, isLoading } = useCurrency()
 
   useEffect(() => {
@@ -67,25 +69,39 @@ export default function AccountPage() {
   }
 
   async function handleConnectGmail() {
-    await withToken(async token => {
-      const { auth_url } = await getGmailConnectUrl(token)
-      window.location.href = auth_url
-    })
+    try {
+      await withToken(async token => {
+        const { auth_url } = await getGmailConnectUrl(token)
+        window.location.href = auth_url
+      })
+    } catch {
+      toast.error('Could not start the Gmail connection. Please try again.')
+    }
   }
 
   async function handleScan() {
-    await withToken(async token => {
-      await startGmailScan(token)
-      setGmail(g => (g ? { ...g, scan_status: 'running' } : g))
-      router.push('/review')
-    })
+    try {
+      await withToken(async token => {
+        await startGmailScan(token)
+        setGmail(g => (g ? { ...g, scan_status: 'running' } : g))
+        router.push('/review')
+      })
+    } catch {
+      toast.error('Could not start the inbox scan. Please try again.')
+    }
   }
 
   async function handleDisconnectGmail() {
-    await withToken(async token => {
-      await disconnectGmail(token)
-      setGmail({ connected: false })
-    })
+    try {
+      await withToken(async token => {
+        await disconnectGmail(token)
+        setGmail({ connected: false })
+        setConfirmDisconnect(false)
+        toast.success('Gmail disconnected')
+      })
+    } catch {
+      toast.error('Could not disconnect Gmail. Please try again.')
+    }
   }
 
   async function handleSaveIncome() {
@@ -199,7 +215,7 @@ export default function AccountPage() {
           <div>
             <p className="text-sm font-medium">Monthly income</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Used to show what share of your income goes to subscriptions
+              Used to show what share of your income goes to recurring payments
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -231,12 +247,17 @@ export default function AccountPage() {
 
       {/* Section 3 — Connected inbox */}
       {gmail && (
-        <div className="rounded-2xl bg-card shadow-md p-6 space-y-4">
-          <h2 className="text-lg font-semibold">Inbox</h2>
+        <div id="inbox" className="scroll-mt-6 rounded-2xl bg-card shadow-md p-6 space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold">Email connection</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Let Subtrack find recurring payments in Gmail receipts for you to review.
+            </p>
+          </div>
 
           {gmail.connected ? (
             <>
-              <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{gmail.email_address}</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
@@ -263,34 +284,45 @@ export default function AccountPage() {
                 <p className="text-xs text-destructive">Last scan failed: {gmail.scan_error}</p>
               )}
 
-              <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
+              <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-sm font-medium">Disconnect</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Subtrack keeps your subscriptions but stops reading your email
+                    Subtrack keeps your recurring payments but stops reading your email
                   </p>
                 </div>
-                <Button
-                  variant="ghost"
-                  onClick={handleDisconnectGmail}
-                  disabled={gmailBusy}
-                  className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
-                >
-                  Disconnect
-                </Button>
+                {confirmDisconnect ? (
+                  <div className="flex shrink-0 gap-2">
+                    <Button variant="destructive" size="sm" onClick={handleDisconnectGmail} disabled={gmailBusy}>
+                      {gmailBusy ? 'Disconnecting…' : 'Confirm disconnect'}
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => setConfirmDisconnect(false)} disabled={gmailBusy}>
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    onClick={() => setConfirmDisconnect(true)}
+                    disabled={gmailBusy}
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
+                  >
+                    Disconnect Gmail
+                  </Button>
+                )}
               </div>
             </>
           ) : (
-            <div className="flex items-center justify-between gap-4">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm font-medium">Connect Gmail</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Find subscriptions from your receipt emails instead of adding them
+                  Find recurring payments from your receipt emails instead of adding them
                   by hand. Read-only, and nothing is added without your approval.
                 </p>
               </div>
               <Button onClick={handleConnectGmail} disabled={gmailBusy} className="shrink-0">
-                Connect
+                Connect Gmail
               </Button>
             </div>
           )}

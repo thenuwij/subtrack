@@ -15,6 +15,7 @@ import {
 import type { DetectedSubscription, GmailStatus } from '@/types'
 import { formatCurrency } from '@/lib/utils/currency'
 import { Button } from '@/components/ui/button'
+import { formatCategory } from '@/lib/utils/categories'
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
@@ -185,7 +186,7 @@ export default function ReviewPage() {
               Review detections
             </h1>
             <p className="max-w-2xl text-sm text-muted-foreground">
-              Found in your email receipts. Nothing is added to your subscriptions
+              Found in your email receipts. Nothing is added to your recurring payments
               until you approve it.
             </p>
           </div>
@@ -230,7 +231,7 @@ export default function ReviewPage() {
               <div>
                 <p className="font-medium text-foreground">No inbox connected</p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Connect Gmail and Subtrack will find your subscriptions from receipt
+                  Connect Gmail and Subtrack will find recurring payments from receipt
                   emails instead of you entering them by hand.
                 </p>
                 <Link
@@ -269,7 +270,7 @@ export default function ReviewPage() {
                   ? "Detections you dismiss show up here so you can check or restore them."
                   : gmail.last_scanned_at
                     ? 'Everything found has been approved or dismissed.'
-                    : 'Run a scan to look for subscriptions in your email.'}
+                    : 'Run a scan to look for recurring payments in your email.'}
               </p>
             </div>
           </div>
@@ -342,7 +343,7 @@ export default function ReviewPage() {
                           ? `${item.charge_count} charge${item.charge_count === 1 ? '' : 's'} found`
                           : 'No charges found — detected from cancellation notice'}
                         {' · '}
-                        <span className="capitalize">{item.category}</span>
+                        <span>{formatCategory(item.category)}</span>
                         {' · via '}
                         {item.sender_domain}
                       </p>
@@ -352,7 +353,7 @@ export default function ReviewPage() {
                           {rose && <ArrowUpRight className="h-3 w-3" />}
                           {formatCurrency(item.previous_amount, item.currency)} →{' '}
                           {formatCurrency(item.amount, item.currency)}
-                          {isPriceChange && ' — updates your existing subscription'}
+                          {isPriceChange && ' — updates your existing payment'}
                         </p>
                       )}
 
@@ -360,7 +361,7 @@ export default function ReviewPage() {
                         <p className="text-xs text-muted-foreground">
                           Updates your existing{' '}
                           <span className="font-medium text-foreground">
-                            {item.current_name ?? 'subscription'}
+                            {item.current_name ?? 'payment'}
                           </span>
                           {item.current_amount !== null && (
                             <>
