@@ -1,7 +1,9 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-export async function middleware(request: NextRequest) {
+// Next 16 renamed the `middleware` convention to `proxy`. It only runs from the
+// project root — while this lived at app/middleware.ts it never executed at all.
+export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   })
@@ -34,7 +36,7 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const isAuthPage = request.nextUrl.pathname.startsWith('/login')
-  const isProtectedPage = ['/dashboard', '/subscriptions', '/expenses', '/budgets', '/income', '/savings', '/account'].some(
+  const isProtectedPage = ['/dashboard', '/subscriptions', '/review', '/savings', '/account'].some(
     path => request.nextUrl.pathname.startsWith(path)
   )
 
@@ -50,5 +52,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/subscriptions/:path*', '/expenses/:path*', '/budgets/:path*', '/income/:path*', '/savings/:path*', '/account/:path*', '/login'],
+  matcher: ['/dashboard/:path*', '/subscriptions/:path*', '/review/:path*', '/savings/:path*', '/account/:path*', '/login'],
 }

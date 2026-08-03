@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { getSubscriptions, createSubscription, deleteSubscription, updateSubscription } from '@/lib/api'
-import { Subscription } from '@/types'
+import { getSubscriptions, createSubscription, deleteSubscription, updateSubscription, getDuplicates, mergeSubscription } from '@/lib/api'
+import { DuplicatePair, Subscription, SubscriptionInput } from '@/types'
 import { SubscriptionCard }       from '@/components/subscriptions/SubscriptionCard'
 import { AddSubscriptionModal }   from '@/components/subscriptions/AddSubscriptionModal'
 import { FilterBar }              from '@/components/shared/FilterBar'
@@ -42,6 +42,10 @@ export default function SubscriptionsPage() {
   const supabase = createClient()
 
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
+  // Two rows for one service double-counts the cost, and detection can easily
+  // produce "Claude" and "Anthropic (Claude)" separately.
+  const [duplicates, setDuplicates] = useState<DuplicatePair[]>([])
+  const [merging, setMerging] = useState<string | null>(null)
   const [loading, setLoading]             = useState(true)
   const [error, setError]                 = useState<string | null>(null)
   const [modalOpen, setModalOpen]         = useState(false)
@@ -65,8 +69,10 @@ export default function SubscriptionsPage() {
     try {
       const data = await getSubscriptions(session.access_token)
       setSubscriptions(data)
-    } catch (e: any) {
-      setError(e?.message ?? 'Failed to load subscriptions.')
+      // Best effort — a duplicate check failing shouldn't break the page.
+      getDuplicates(session.access_token).then(setDuplicates).catch(() => {})
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load subscriptions.')
       toast.error('Something went wrong')
     } finally {
       setLoading(false)
@@ -75,9 +81,25 @@ export default function SubscriptionsPage() {
 
   useEffect(() => { fetchSubscriptions() }, []) // eslint-disable-line
 
+  async function handleMerge(pair: DuplicatePair) {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+    setMerging(pair.merge.id)
+    try {
+      await mergeSubscription(session.access_token, pair.merge.id, pair.keep.id)
+      setDuplicates(prev => prev.filter(p => p.merge.id !== pair.merge.id))
+      toast.success(`Merged into ${pair.keep.name}`)
+      await fetchSubscriptions()
+    } catch {
+      toast.error('Could not merge')
+    } finally {
+      setMerging(null)
+    }
+  }
+
   // ── add ────────────────────────────────────────────────────────────────────
 
-  async function handleAdd(formData: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) {
+  async function handleAdd(formData: SubscriptionInput) {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
     const created = await createSubscription(session.access_token, formData)
@@ -87,7 +109,7 @@ export default function SubscriptionsPage() {
 
   // ── update ─────────────────────────────────────────────────────────────────
 
-  async function handleEdit(formData: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) {
+  async function handleEdit(formData: SubscriptionInput) {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session || !editingSubscription) throw new Error('Not authenticated')
     const updated = await updateSubscription(session.access_token, editingSubscription.id, formData)
@@ -198,6 +220,35 @@ export default function SubscriptionsPage() {
           Add
         </Button>
       </div>
+
+      {/* Same service tracked twice — the totals are wrong until it's resolved. */}
+      {duplicates.map(pair => (
+        <div
+          key={pair.merge.id}
+          className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-4"
+        >
+          <p className="text-sm font-medium text-foreground">
+            Possible duplicate: {pair.keep.name} and {pair.merge.name}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {pair.reason} Both are counted in your total right now.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => handleMerge(pair)} disabled={merging === pair.merge.id}>
+              Merge into {pair.keep.name}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={() => setDuplicates(prev => prev.filter(p => p.merge.id !== pair.merge.id))}
+              disabled={merging === pair.merge.id}
+            >
+              They&apos;re different
+            </Button>
+          </div>
+        </div>
+      ))}
 
       {/* Error */}
       {error && (

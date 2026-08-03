@@ -52,6 +52,9 @@ export function AddSavingsModal({ open, onClose, onSubmit, initialData }: Props)
   useEffect(() => {
     setForm(getInitialForm())
     setError(null)
+    // Re-init only when the edited item changes. Including getInitialForm would
+    // also fire when baseCurrency loads, wiping a form the user is typing in.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialData])
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -79,8 +82,8 @@ export function AddSavingsModal({ open, onClose, onSubmit, initialData }: Props)
       })
       setForm(getInitialForm)
       onClose()
-    } catch (e: any) {
-      setError(e?.message ?? 'Something went wrong.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong.')
     } finally {
       setLoading(false)
     }

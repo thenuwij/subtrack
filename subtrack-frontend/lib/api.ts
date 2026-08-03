@@ -1,3 +1,5 @@
+import type { SavingsGoalInput, SubscriptionInput } from '@/types'
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 async function getHeaders(token: string) {
@@ -16,7 +18,7 @@ export async function getSubscriptions(token: string) {
   return res.json()
 }
 
-export async function createSubscription(token: string, data: any) {
+export async function createSubscription(token: string, data: SubscriptionInput) {
   const res = await fetch(`${API_URL}/subscriptions/`, {
     method: 'POST',
     headers: await getHeaders(token),
@@ -35,59 +37,116 @@ export async function deleteSubscription(token: string, id: string) {
   return res.json()
 }
 
-// Expenses
-export async function getExpenses(token: string) {
-  const res = await fetch(`${API_URL}/expenses/`, {
+export async function getSubscriptionChanges(token: string, days: number = 30) {
+  const res = await fetch(`${API_URL}/subscriptions/changes?days=${days}`, {
     headers: await getHeaders(token),
   })
-  if (!res.ok) throw new Error('Failed to fetch expenses')
+  if (!res.ok) throw new Error('Failed to fetch subscription changes')
   return res.json()
 }
 
-export async function createExpense(token: string, data: any) {
-  const res = await fetch(`${API_URL}/expenses/`, {
+// Gmail
+export async function getGmailStatus(token: string) {
+  const res = await fetch(`${API_URL}/gmail/status`, {
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to fetch Gmail status')
+  return res.json()
+}
+
+export async function getGmailConnectUrl(token: string) {
+  const res = await fetch(`${API_URL}/gmail/connect`, {
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to start Gmail connection')
+  return res.json()
+}
+
+export async function startGmailScan(token: string) {
+  const res = await fetch(`${API_URL}/gmail/scan`, {
     method: 'POST',
     headers: await getHeaders(token),
-    body: JSON.stringify(data),
   })
-  if (!res.ok) throw new Error('Failed to create expense')
+  if (!res.ok) throw new Error('Failed to start scan')
   return res.json()
 }
 
-export async function deleteExpense(token: string, id: string) {
-  const res = await fetch(`${API_URL}/expenses/${id}`, {
+export async function disconnectGmail(token: string) {
+  const res = await fetch(`${API_URL}/gmail/disconnect`, {
     method: 'DELETE',
     headers: await getHeaders(token),
   })
-  if (!res.ok) throw new Error('Failed to delete expense')
+  if (!res.ok) throw new Error('Failed to disconnect Gmail')
   return res.json()
 }
 
-// Budgets
-export async function getBudgets(token: string) {
-  const res = await fetch(`${API_URL}/budgets/`, {
+// Detected subscriptions (review queue)
+export async function getDetected(
+  token: string,
+  status: 'pending' | 'dismissed' = 'pending'
+) {
+  const res = await fetch(`${API_URL}/detected/?status=${status}`, {
     headers: await getHeaders(token),
   })
-  if (!res.ok) throw new Error('Failed to fetch budgets')
+  if (!res.ok) throw new Error('Failed to fetch detected subscriptions')
   return res.json()
 }
 
-export async function createBudget(token: string, data: any) {
-  const res = await fetch(`${API_URL}/budgets/`, {
+export async function restoreDetected(token: string, id: string) {
+  const res = await fetch(`${API_URL}/detected/${id}/restore`, {
     method: 'POST',
     headers: await getHeaders(token),
-    body: JSON.stringify(data),
   })
-  if (!res.ok) throw new Error('Failed to create budget')
+  if (!res.ok) throw new Error('Failed to restore')
   return res.json()
 }
 
-export async function deleteBudget(token: string, id: string) {
-  const res = await fetch(`${API_URL}/budgets/${id}`, {
-    method: 'DELETE',
+export async function approveDetected(
+  token: string,
+  id: string,
+  overrides: {
+    name?: string
+    category?: string
+    amount?: number
+    cycle?: string
+    share_ratio?: number
+    share_amount?: number
+    replace_subscription_id?: string
+  } = {}
+) {
+  const res = await fetch(`${API_URL}/detected/${id}/approve`, {
+    method: 'POST',
+    headers: await getHeaders(token),
+    body: JSON.stringify(overrides),
+  })
+  if (!res.ok) throw new Error('Failed to approve')
+  return res.json()
+}
+
+export async function dismissDetected(token: string, id: string) {
+  const res = await fetch(`${API_URL}/detected/${id}/dismiss`, {
+    method: 'POST',
     headers: await getHeaders(token),
   })
-  if (!res.ok) throw new Error('Failed to delete budget')
+  if (!res.ok) throw new Error('Failed to dismiss')
+  return res.json()
+}
+
+export async function getDuplicates(token: string) {
+  const res = await fetch(`${API_URL}/subscriptions/duplicates`, {
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to check for duplicates')
+  return res.json()
+}
+
+export async function mergeSubscription(token: string, id: string, into: string) {
+  const res = await fetch(`${API_URL}/subscriptions/${id}/merge`, {
+    method: 'POST',
+    headers: await getHeaders(token),
+    body: JSON.stringify({ into }),
+  })
+  if (!res.ok) throw new Error('Failed to merge')
   return res.json()
 }
 
@@ -109,71 +168,27 @@ export async function getPreferences(token: string) {
   return res.json()
 }
 
-export async function updatePreferences(token: string, base_currency: string) {
+// Send only the fields you want to change — omitted fields are left untouched.
+export async function updatePreferences(
+  token: string,
+  data: { base_currency?: string; monthly_income?: number }
+) {
   const res = await fetch(`${API_URL}/preferences`, {
     method: 'PATCH',
     headers: await getHeaders(token),
-    body: JSON.stringify({ base_currency }),
+    body: JSON.stringify(data),
   })
   if (!res.ok) throw new Error('Failed to update preferences')
   return res.json()
 }
 
-export async function updateSubscription(token: string, id: string, data: any) {
+export async function updateSubscription(token: string, id: string, data: Partial<SubscriptionInput>) {
   const res = await fetch(`${API_URL}/subscriptions/${id}`, {
     method: 'PATCH',
     headers: await getHeaders(token),
     body: JSON.stringify(data),
   })
   if (!res.ok) throw new Error('Failed to update subscription')
-  return res.json()
-}
-
-export async function updateExpense(token: string, id: string, data: any) {
-  const res = await fetch(`${API_URL}/expenses/${id}`, {
-    method: 'PATCH',
-    headers: await getHeaders(token),
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error('Failed to update expense')
-  return res.json()
-}
-
-// Income
-export async function getIncome(token: string) {
-  const res = await fetch(`${API_URL}/income/`, {
-    headers: await getHeaders(token),
-  })
-  if (!res.ok) throw new Error('Failed to fetch income')
-  return res.json()
-}
-
-export async function createIncome(token: string, data: any) {
-  const res = await fetch(`${API_URL}/income/`, {
-    method: 'POST',
-    headers: await getHeaders(token),
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error('Failed to create income')
-  return res.json()
-}
-
-export async function updateIncome(token: string, id: string, data: any) {
-  const res = await fetch(`${API_URL}/income/${id}`, {
-    method: 'PATCH',
-    headers: await getHeaders(token),
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error('Failed to update income')
-  return res.json()
-}
-
-export async function deleteIncome(token: string, id: string) {
-  const res = await fetch(`${API_URL}/income/${id}`, {
-    method: 'DELETE',
-    headers: await getHeaders(token),
-  })
-  if (!res.ok) throw new Error('Failed to delete income')
   return res.json()
 }
 
@@ -186,7 +201,7 @@ export async function getSavingsGoals(token: string) {
   return res.json()
 }
 
-export async function createSavingsGoal(token: string, data: any) {
+export async function createSavingsGoal(token: string, data: SavingsGoalInput) {
   const res = await fetch(`${API_URL}/savings/`, {
     method: 'POST',
     headers: await getHeaders(token),
@@ -196,7 +211,7 @@ export async function createSavingsGoal(token: string, data: any) {
   return res.json()
 }
 
-export async function updateSavingsGoal(token: string, id: string, data: any) {
+export async function updateSavingsGoal(token: string, id: string, data: Partial<SavingsGoalInput>) {
   const res = await fetch(`${API_URL}/savings/${id}`, {
     method: 'PATCH',
     headers: await getHeaders(token),

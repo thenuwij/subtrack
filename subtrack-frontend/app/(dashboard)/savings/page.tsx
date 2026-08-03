@@ -26,8 +26,8 @@ export default function SavingsPage() {
     try {
       const data = await getSavingsGoals(session.access_token)
       setGoals(data)
-    } catch (e: any) {
-      setError(e?.message ?? 'Failed to load savings goals.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load savings goals.')
       toast.error('Something went wrong')
     } finally {
       setLoading(false)
