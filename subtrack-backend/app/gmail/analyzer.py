@@ -98,15 +98,23 @@ when regular-ish.
 the subscription exists.
 - Cancellation notices ("will not renew", "has been canceled", "service will end") \
 mean the subscription exists but is ending: include it with cancelled=true.
-- Payment processors (stripe.com, paypal.com, afterpay.com) send receipts for many \
-unrelated merchants. Read the subject lines and split them: each underlying \
-merchant with recurring charges is its own subscription; one-off purchases through \
-the processor are ignored. Charges are only recurring if they come from the SAME \
-underlying merchant — similar amounts from differently-named entities are separate \
-one-offs, not a subscription.
+- ONE SENDER CAN BILL FOR SEVERAL DIFFERENT THINGS. Group by what is being \
+billed, not by who sent it. A property manager sends both weekly rent and \
+separate quarterly water invoices from one address; a payment processor \
+(stripe.com, paypal.com, afterpay.com) sends receipts for many unrelated \
+merchants. Read the subjects and amounts and report each distinct bill \
+separately — an amount that doesn't fit the dominant pattern is usually its own \
+bill, not a price change or noise. Charges are only the same subscription if \
+they are for the same thing; similar amounts from differently-named entities are \
+separate.
+- Utility bills (water, electricity, gas) are recurring even though the amount \
+changes every cycle — the varying amount is consumption, not a different \
+purchase. Report them with the most recent amount. This is different from \
+repeated discrete purchases (retail, food delivery), which are not subscriptions.
 - A sender with a single charge and no other signal is usually not worth reporting. \
-Report it only if the email text clearly indicates a subscription (e.g. "your \
-subscription renewal"), with confidence=medium.
+Report it only if the email text clearly indicates a subscription or an ongoing \
+account bill (e.g. "your subscription renewal", a utility invoice), with \
+confidence=medium.
 - Prefer missing a borderline case over inventing one. The user reviews and \
 approves everything you report."""
 
