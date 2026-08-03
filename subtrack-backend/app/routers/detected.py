@@ -42,6 +42,12 @@ def _serialize(d: DetectedSubscription, tracked: Optional[Subscription] = None) 
         "id": str(d.id),
         "merchant": d.merchant,
         "sender_domain": d.sender_domain,
+        "product_key": d.product_key or "",
+        # What approving will do to the tracked subscription, so the button can
+        # say so rather than leaving the user to guess.
+        "current_name": tracked.name if tracked else None,
+        "current_cycle": (tracked.cycle.value if hasattr(tracked.cycle, "value") else tracked.cycle)
+            if tracked else None,
         "category": d.category.value if hasattr(d.category, "value") else d.category,
         "cycle": d.cycle.value if hasattr(d.cycle, "value") else d.cycle,
         "amount": d.amount,
@@ -141,8 +147,22 @@ def approve(
         sub.full_amount = split.full_amount
         sub.share_ratio = split.share_ratio
         sub.split_mode = split.split_mode
+        # A detection usually knows the product better than an old generic name
+        # ("Apple" -> "Apple Music"), so adopt the better name unless the user
+        # gave one explicitly.
+        if overrides.name:
+            sub.name = overrides.name
+        elif detection.merchant and len(detection.merchant) > len(sub.name):
+            sub.name = detection.merchant
+        sub.category = category
         sub.cycle = cycle
         sub.currency = detection.currency
+        # Bind the subscription to its source so later scans recognise it even
+        # if the analyzer words the merchant differently.
+        sub.source_domain = detection.sender_domain
+        sub.source_key = detection.product_key or sub.source_key
+        if detection.cancelled:
+            sub.is_active = False
         after = monthly_equivalent(sub.amount, sub.cycle)
         if after != before:
             log_change(db, sub, ChangeKind.price_change, before, after)
@@ -155,6 +175,8 @@ def approve(
             full_amount=split.full_amount,
             share_ratio=split.share_ratio,
             split_mode=split.split_mode,
+            source_domain=detection.sender_domain,
+            source_key=detection.product_key or None,
             currency=detection.currency,
             exchange_rate=1.0,
             converted_amount=split.amount,

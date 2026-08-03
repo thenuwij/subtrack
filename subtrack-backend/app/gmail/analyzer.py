@@ -36,10 +36,20 @@ GROUPS_PER_CALL = 8
 class DetectedSubscription(BaseModel):
     sender_domain: str = Field(description="The sender domain this came from, exactly as given")
     merchant: str = Field(
-        description="Clean display name of the business being paid, e.g. 'Origin "
-                    "Broadband', 'Netflix'. For payment processors (Stripe, PayPal, "
-                    "Afterpay) this is the underlying merchant from the subject lines, "
-                    "and one domain may yield several subscriptions."
+        description="What the user is paying for, specific enough to tell apart "
+                    "from anything else billed by the same sender. Name the "
+                    "product, not just the company: 'Apple Music', 'iCloud 2TB', "
+                    "'Origin Energy', 'Rent - 90/2-6 Willis St'. Read the excerpt "
+                    "— the subject is often generic ('Your tax invoice from "
+                    "Apple.') while the excerpt names the actual product."
+    )
+    product_key: str = Field(
+        description="A stable lowercase identifier for this exact bill, used to "
+                    "recognise it again on a later scan: lowercase, words joined "
+                    "by hyphens, no amounts or dates. E.g. 'apple-music', "
+                    "'apple-icloud-2tb', 'origin-energy', 'rent-willis-st'. It "
+                    "must stay identical for the same bill across scans even if "
+                    "the wording of the emails changes."
     )
     cycle: Literal["weekly", "monthly", "yearly"] = Field(
         description="Billing cycle inferred from the spacing of actual charges. "
@@ -116,7 +126,11 @@ Report it only if the email text clearly indicates a subscription or an ongoing 
 account bill (e.g. "your subscription renewal", a utility invoice), with \
 confidence=medium.
 - Prefer missing a borderline case over inventing one. The user reviews and \
-approves everything you report."""
+approves everything you report.
+- Each email includes an excerpt of its body. Use it to name the product: a \
+sender like Apple bills several different subscriptions under one generic \
+subject line, and the excerpt is what tells them apart. Report each as its own \
+subscription with its own product_key."""
 
 
 def _group_by_domain(candidates: list[ReceiptCandidate]) -> dict[str, list[ReceiptCandidate]]:
@@ -133,6 +147,10 @@ def _render_group(domain: str, emails: list[ReceiptCandidate]) -> str:
     for c in emails:
         amount = f"{c.currency} {c.amount:.2f}" if c.amount is not None else "no amount parsed"
         lines.append(f"  {c.date}  [{amount}]  {c.subject}")
+        # The subject alone can't distinguish Apple Music from iCloud; the
+        # excerpt is what names the product being billed.
+        if c.excerpt:
+            lines.append(f"      … {c.excerpt[:320]}")
     return "\n".join(lines)
 
 
@@ -171,10 +189,46 @@ def analyze(candidates: list[ReceiptCandidate]) -> list[DetectedSubscription]:
 
         for sub in response.parsed_output.subscriptions:
             # The model only knows the domains it was shown; anything else is a slip.
-            if sub.sender_domain in chunk:
-                results.append(sub)
-            else:
+            if sub.sender_domain not in chunk:
                 logger.warning("Dropping result for unknown domain %r", sub.sender_domain)
+                continue
+            # A bill with no amount can't be tracked as a cost.
+            if sub.amount is None or sub.amount <= 0:
+                logger.info("Dropping %r — no usable amount", sub.merchant)
+                continue
+            results.append(sub)
 
-    results.sort(key=lambda s: (-s.charge_count, s.merchant.lower()))
-    return results
+    return _dedupe(results)
+
+
+def _dedupe(subs: list[DetectedSubscription]) -> list[DetectedSubscription]:
+    """Collapse results that describe the same bill.
+
+    One analysis pass can emit the same subscription twice — the same product
+    key at two different amounts, for instance, when the model treats a price
+    change as two separate bills. Left alone that becomes two rows in the review
+    queue and, if both are approved, two subscriptions.
+    """
+    best: dict[tuple, DetectedSubscription] = {}
+
+    for sub in subs:
+        key = (sub.sender_domain, (sub.product_key or "").strip().lower())
+        if not key[1]:
+            key = (sub.sender_domain, sub.merchant.strip().lower(), sub.cycle)
+
+        current = best.get(key)
+        if current is None:
+            best[key] = sub
+            continue
+
+        # Keep the better-evidenced one; carry the other's amount across as the
+        # previous price so a real change isn't lost in the merge.
+        winner, loser = (sub, current) if sub.charge_count > current.charge_count else (current, sub)
+        if winner.previous_amount is None and abs(loser.amount - winner.amount) > 0.01:
+            winner.previous_amount = loser.amount
+        winner.charge_count = max(winner.charge_count, loser.charge_count)
+        best[key] = winner
+
+    merged = list(best.values())
+    merged.sort(key=lambda s: (-s.charge_count, s.merchant.lower()))
+    return merged

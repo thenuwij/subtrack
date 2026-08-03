@@ -339,6 +339,26 @@ export default function ReviewPage() {
                         </p>
                       )}
 
+                      {isPriceChange && (
+                        <p className="text-xs text-muted-foreground">
+                          Updates your existing{' '}
+                          <span className="font-medium text-foreground">
+                            {item.current_name ?? 'subscription'}
+                          </span>
+                          {item.current_amount !== null && (
+                            <>
+                              {' — '}
+                              {formatCurrency(item.current_amount, item.currency)}
+                              {' → '}
+                              <span className="font-medium text-foreground">
+                                {formatCurrency(myAmount, item.currency)}
+                              </span>
+                            </>
+                          )}
+                          . No duplicate is created.
+                        </p>
+                      )}
+
                       {/* An agreed uneven split doesn't rescale on its own —
                           who covers an increase is for the housemates to
                           decide, so say what happens if they do nothing. */}

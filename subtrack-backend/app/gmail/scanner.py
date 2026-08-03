@@ -5,6 +5,7 @@ mailbox, and it keeps only derived fields (merchant, amount, date). Raw bodies
 are never returned or stored.
 """
 import base64
+import html
 import logging
 import re
 import time
@@ -60,6 +61,7 @@ class ReceiptCandidate:
     amount: float | None
     currency: str | None
     confidence: str          # "high" when the amount sat on a total-ish line
+    excerpt: str = ""        # short cleaned snippet; names the product being billed
 
 
 def build_credentials(refresh_token: str) -> Credentials:
@@ -81,19 +83,73 @@ def _header(headers: list[dict], name: str) -> str:
     return ""
 
 
-def _extract_body_text(payload: dict) -> str:
-    """Walk the MIME tree for text. Prefers text/plain; HTML is stripped."""
-    if payload.get("mimeType", "").startswith("multipart"):
-        return " ".join(_extract_body_text(p) for p in payload.get("parts", []))
-
+def _decode_part(payload: dict) -> str:
     data = payload.get("body", {}).get("data")
     if not data:
         return ""
 
     text = base64.urlsafe_b64decode(data.encode()).decode("utf-8", errors="ignore")
     if payload.get("mimeType") == "text/html":
+        # Drop style/script bodies before stripping tags. Removing only the tags
+        # leaves their contents behind, and a marketing-grade HTML email carries
+        # kilobytes of CSS — enough to bury the product name entirely.
+        text = re.sub(r"(?is)<(style|script|head)[^>]*>.*?</\1>", " ", text)
+        text = re.sub(r"(?s)<!--.*?-->", " ", text)
+        text = re.sub(r"(?i)<(br|/p|/div|/tr|/td|/h\d)[^>]*>", "\n", text)
         text = re.sub(r"<[^>]+>", " ", text)
+        text = html.unescape(text)
     return text
+
+
+def _collect_parts(payload: dict, by_type: dict[str, list[str]]) -> None:
+    if payload.get("mimeType", "").startswith("multipart"):
+        for part in payload.get("parts", []):
+            _collect_parts(part, by_type)
+        return
+    text = _decode_part(payload)
+    if text.strip():
+        by_type.setdefault(payload.get("mimeType", ""), []).append(text)
+
+
+def _extract_body_text(payload: dict) -> str:
+    """Readable body text. Prefers text/plain, falls back to cleaned HTML."""
+    by_type: dict[str, list[str]] = {}
+    _collect_parts(payload, by_type)
+
+    for mime in ("text/plain", "text/html"):
+        if by_type.get(mime):
+            return "\n".join(by_type[mime])
+    return "\n".join(t for parts in by_type.values() for t in parts)
+
+
+# Boilerplate that crowds out the useful part of a receipt.
+_NOISE = re.compile(
+    r"(?i)(unsubscribe|privacy policy|terms (of|and)|all rights reserved|"
+    r"view (this|in) browser|do not reply|copyright|©|follow us|"
+    r"manage (your )?(preferences|subscription settings))"
+)
+
+# Belt and braces: any CSS that survives tag-stripping is noise, not content.
+_CSS_LIKE = re.compile(r"[{};]|@media|!important|font-family|text-decoration|px\s*[;}]")
+
+
+def _excerpt(text: str, limit: int = 600) -> str:
+    """A short, cleaned slice of the body.
+
+    A subject line often says nothing useful — "Your tax invoice from Apple."
+    covers Apple Music, iCloud and everything else. The product name lives in
+    the body, so a trimmed excerpt is what lets a detection be named properly.
+    Only this snippet is sent for analysis; full bodies are never stored.
+    """
+    lines = []
+    for raw in re.split(r"[\n\r]+", text):
+        line = re.sub(r"\s+", " ", raw).strip()
+        if len(line) < 3 or _NOISE.search(line) or _CSS_LIKE.search(line):
+            continue
+        lines.append(line)
+        if sum(len(x) for x in lines) > limit:
+            break
+    return " | ".join(lines)[:limit]
 
 
 def _parse_amount(text: str) -> tuple[float | None, str | None, str]:
@@ -172,6 +228,7 @@ def _to_candidate(message: dict) -> ReceiptCandidate:
         amount=amount,
         currency=currency,
         confidence=confidence,
+        excerpt=_excerpt(body),
     )
 
 

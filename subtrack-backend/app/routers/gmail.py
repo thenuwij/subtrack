@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
 # Google returns scopes in a different order/spelling than requested (and drops
@@ -183,8 +184,89 @@ def gmail_callback(code: str, state: str, db: Session = Depends(get_db)):
 
 AMOUNT_TOLERANCE = 0.05  # ignore sub-5-cent differences (rounding, FX wobble)
 
-FIRST_SCAN_MONTHS = 6
-RESCAN_MONTHS = 3
+SCAN_MONTHS = 6      # deep enough for quarterly and annual bills
+
+
+def _norm(text: str) -> str:
+    """Loose comparison key — case, punctuation and spacing all vary."""
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def _billed_amount(sub: Subscription) -> float:
+    """What the biller charges, which is what a receipt shows. For a shared
+    bill that's the whole cost, not this user's share."""
+    return sub.full_amount if sub.full_amount is not None else sub.amount
+
+
+def _same_price(sub: Subscription, found) -> bool:
+    return abs(_billed_amount(sub) - found.amount) <= AMOUNT_TOLERANCE
+
+
+def _match_subscription(subs: list[Subscription], found) -> Subscription | None:
+    """Find the tracked subscription this detection refers to.
+
+    Identity has to survive the analyzer rewording things between scans, so the
+    stable source key is tried first. Name matching is only a fallback for
+    subscriptions added by hand, and is deliberately narrow: it also requires
+    the same billing cycle, so Apple Music and iCloud don't collapse into each
+    other just because both are "Apple".
+    """
+    key = (found.product_key or "").strip().lower()
+    if key:
+        for sub in subs:
+            if sub.source_key == key and sub.source_domain == found.sender_domain:
+                return sub
+
+    # Subscriptions added by hand — or approved before product keys existed —
+    # have nothing stable to match on, so fall back to what they bill.
+    unkeyed = [s for s in subs if not s.source_key]
+
+    name = _norm(found.merchant)
+    by_name = [s for s in unkeyed if _norm(s.name) == name and s.cycle == found.cycle]
+    if len(by_name) == 1:
+        return by_name[0]
+    if len(by_name) > 1:
+        # Two subscriptions share a name (a generic "Apple" for two different
+        # products). Only the amount can tell them apart; if it can't, do
+        # nothing rather than update the wrong one.
+        exact = [s for s in by_name if _same_price(s, found)]
+        return exact[0] if len(exact) == 1 else None
+
+    # A generic existing name ("Apple") won't match a specific detection
+    # ("Apple Music"), but an identical amount and cycle almost certainly means
+    # the same bill. Only accept it when exactly one candidate fits.
+    same_bill = [s for s in unkeyed if s.cycle == found.cycle and _same_price(s, found)]
+    return same_bill[0] if len(same_bill) == 1 else None
+
+
+def _match_detection(rows: list[DetectedSubscription], found) -> DetectedSubscription | None:
+    """Find an earlier detection for the same bill, so a rescan updates it
+    rather than stacking near-duplicates."""
+    key = (found.product_key or "").strip().lower()
+    if key:
+        for row in rows:
+            if (row.product_key or "").strip().lower() == key \
+                    and row.sender_domain == found.sender_domain:
+                return row
+
+    for row in rows:
+        if row.sender_domain != found.sender_domain:
+            continue
+        if _norm(row.merchant) == _norm(found.merchant):
+            return row
+        # Rows created before product keys existed, and rows the analyzer has
+        # since reworded, can only be recognised by what they bill: same sender,
+        # same amount, same cycle is the same bill in practice.
+        if not (row.product_key or "").strip() \
+                and row.cycle == found.cycle \
+                and abs(row.amount - found.amount) <= AMOUNT_TOLERANCE:
+            return row
+        # Same bill after a price change: the old amount is what it used to be.
+        if found.previous_amount is not None \
+                and abs(row.amount - found.previous_amount) <= AMOUNT_TOLERANCE \
+                and row.status == DetectionStatus.pending:
+            return row
+    return None
 
 
 def _run_scan(user_id: str):
@@ -201,18 +283,9 @@ def _run_scan(user_id: str):
         if not account:
             return
 
-        # The first scan needs enough history to spot bills that only arrive
-        # every few months — energy, water, insurance, annual plans. Measured on
-        # a real inbox, a 3-month window sees an every-2-months energy bill just
-        # once, which isn't enough to establish a cycle, so it disappears
-        # silently. Later scans can be shallower: those bills are already
-        # tracked, and a rescan only needs to catch what is new or has changed.
-        first_scan = account.last_scanned_at is None
-        months = FIRST_SCAN_MONTHS if first_scan else RESCAN_MONTHS
-
         try:
             candidates = scan(decrypt_token(account.refresh_token_encrypted),
-                              months=months, max_messages=400)
+                              months=SCAN_MONTHS, max_messages=400)
             detected = analyze(candidates)
         except Exception as exc:
             logger.error("Scan failed for %s: %s", user_id, exc)
@@ -222,70 +295,40 @@ def _run_scan(user_id: str):
             return
 
         subscriptions = db.query(Subscription).filter(
-            Subscription.user_id == user_id, Subscription.is_active == True  # noqa: E712
+            Subscription.user_id == user_id
         ).all()
-        subs_by_name = {s.name.lower().strip(): s for s in subscriptions}
 
         existing_detections = db.query(DetectedSubscription).filter(
             DetectedSubscription.user_id == user_id
         ).all()
-        # One merchant+domain can hold several detections — Apple bills three
-        # subscriptions from one address — so the key maps to a list and the
-        # amount disambiguates.
-        detections_by_key: dict = {}
-        for d in existing_detections:
-            detections_by_key.setdefault(
-                (d.merchant.lower().strip(), d.sender_domain), []
-            ).append(d)
-
-        def match_previous(found):
-            group = detections_by_key.get(
-                (found.merchant.lower().strip(), found.sender_domain), []
-            )
-            # Same amount = same detection, regardless of status.
-            for d in group:
-                if abs(d.amount - found.amount) <= AMOUNT_TOLERANCE:
-                    return d
-            # A pending detection whose amount equals the new previous_amount
-            # is the same subscription after a price change — update, not dupe.
-            if found.previous_amount is not None:
-                for d in group:
-                    if (d.status == DetectionStatus.pending
-                            and abs(d.amount - found.previous_amount) <= AMOUNT_TOLERANCE):
-                        return d
-            # A lone entry for this merchant is safe to refresh in place.
-            if len(group) == 1 and group[0].status == DetectionStatus.pending:
-                return group[0]
-            return None
 
         for found in detected:
-            previous = match_previous(found)
+            tracked = _match_subscription(subscriptions, found)
+            previous = _match_detection(existing_detections, found)
 
             # Dismissed means "stop suggesting this" — a rescan must not nag.
-            # Approved means it's already a real subscription; price changes to
-            # it are handled through the tracked-subscription match below.
+            # Approved means it already became a subscription; changes to it are
+            # handled through the tracked-subscription branch below.
             if previous is not None and previous.status != DetectionStatus.pending:
-                continue
+                if tracked is None or _same_price(tracked, found):
+                    continue
 
-            tracked = subs_by_name.get(found.merchant.lower().strip())
             existing_sub_id = None
             if tracked is not None:
-                # Compare against the whole bill, not the user's share. A rent
-                # receipt reads $1,050 while a third-share subscription stores
-                # $350 — comparing those would flag a price change every scan.
-                tracked_billed = tracked.full_amount or tracked.amount
-                if abs(tracked_billed - found.amount) <= AMOUNT_TOLERANCE:
-                    continue  # already tracked at this price — nothing to review
-                existing_sub_id = tracked.id  # tracked, but the price moved
+                if _same_price(tracked, found) and tracked.is_active:
+                    continue   # already tracked at this price — nothing to review
+                existing_sub_id = tracked.id
 
-            if previous is not None:
-                row = previous  # refresh the pending suggestion in place
+            if previous is not None and previous.status == DetectionStatus.pending:
+                row = previous          # refresh the pending suggestion in place
             else:
                 row = DetectedSubscription(user_id=user_id)
                 db.add(row)
+                existing_detections.append(row)
 
             row.merchant = found.merchant
             row.sender_domain = found.sender_domain
+            row.product_key = (found.product_key or "").strip().lower()
             row.category = found.category
             row.cycle = found.cycle
             row.amount = found.amount

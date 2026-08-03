@@ -43,6 +43,13 @@ class Subscription(Base):
     #           must NOT silently rescale it; the housemates decide who absorbs
     #           the increase, so it surfaces for review instead.
     split_mode = Column(String, default="full")
+    # Where this came from, when it was approved from an email detection.
+    # Matching future scans on the display name is unreliable: the analyzer
+    # writes free text, so "Anthropic (Claude)" one scan and "Anthropic Claude"
+    # the next would create a duplicate. The domain + stable product key is what
+    # actually identifies the same bill across scans.
+    source_domain = Column(String, nullable=True, index=True)
+    source_key = Column(String, nullable=True, index=True)
     currency = Column(String, default="AUD")
     exchange_rate = Column(Float, default=1.0)        # rate used at time of entry
     converted_amount = Column(Float, nullable=True)   # amount in user's base currency
@@ -102,6 +109,7 @@ class DetectedSubscription(Base):
     user_id = Column(String, nullable=False, index=True)
     merchant = Column(String, nullable=False)
     sender_domain = Column(String, nullable=False)
+    product_key = Column(String, nullable=False, default="")   # stable across scans
     category = Column(Enum(Category), default=Category.other)
     cycle = Column(Enum(BillingCycle), nullable=False)
     amount = Column(Float, nullable=False)

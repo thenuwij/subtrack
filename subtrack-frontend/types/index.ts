@@ -77,8 +77,11 @@ export interface DetectedSubscription {
   confidence: 'high' | 'medium'
   charge_count: number
   existing_subscription_id: string | null
+  product_key: string
   current_amount: number | null                       // what you pay today, if tracked
-  current_split_mode: 'full' | 'ratio' | 'fixed' | null   // set when this is a price change
+  current_split_mode: 'full' | 'ratio' | 'fixed' | null
+  current_name: string | null                         // name of the subscription it will update
+  current_cycle: string | null   // set when this is a price change
   detected_at: string
 }
 
