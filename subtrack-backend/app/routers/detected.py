@@ -69,13 +69,15 @@ def _get_pending(db: Session, user_id: str, detection_id: UUID) -> DetectedSubsc
 
 
 @router.get("/")
-def list_pending(
+def list_detections(
+    status: DetectionStatus = DetectionStatus.pending,
     user_id: str = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
+    """Pending by default; pass status=dismissed to review what was rejected."""
     pending = db.query(DetectedSubscription).filter(
         DetectedSubscription.user_id == user_id,
-        DetectedSubscription.status == DetectionStatus.pending,
+        DetectedSubscription.status == status,
     ).order_by(DetectedSubscription.charge_count.desc()).all()
 
     tracked_ids = {d.existing_subscription_id for d in pending if d.existing_subscription_id}
@@ -183,3 +185,27 @@ def dismiss(
     detection.resolved_at = datetime.utcnow()
     db.commit()
     return {"dismissed": True}
+
+
+@router.post("/{detection_id}/restore")
+def restore(
+    detection_id: UUID,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    """Put a dismissed detection back in the queue — dismissing by mistake
+    shouldn't mean losing it until the next scan (which deliberately skips
+    dismissed merchants, so it would never come back on its own)."""
+    detection = db.query(DetectedSubscription).filter(
+        DetectedSubscription.id == detection_id,
+        DetectedSubscription.user_id == user_id,
+    ).first()
+    if not detection:
+        raise HTTPException(status_code=404, detail="Detection not found")
+    if detection.status != DetectionStatus.dismissed:
+        raise HTTPException(status_code=409, detail="Only dismissed detections can be restored")
+
+    detection.status = DetectionStatus.pending
+    detection.resolved_at = None
+    db.commit()
+    return {"restored": True}

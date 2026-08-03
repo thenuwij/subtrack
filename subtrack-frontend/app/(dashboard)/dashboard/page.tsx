@@ -13,8 +13,12 @@ function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
 }
 
+// 52 weeks / 12 months. Using 4.33 loses ~0.04 of a week each month, which
+// compounds to a visibly short annual figure on a large weekly bill like rent.
+const WEEKS_PER_MONTH = 52 / 12
+
 function toMonthly(amount: number, cycle: string) {
-  if (cycle === 'weekly') return amount * 4.33
+  if (cycle === 'weekly') return amount * WEEKS_PER_MONTH
   if (cycle === 'yearly') return amount / 12
   return amount
 }

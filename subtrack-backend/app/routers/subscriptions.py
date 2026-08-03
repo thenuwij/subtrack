@@ -11,8 +11,12 @@ from app.middleware.auth import verify_token
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 
 # Weekly/yearly costs have to be normalised before they can be compared month to month.
+# 52 weeks / 12 months — not 4.33, which only covers 51.96 weeks a year and
+# leaves the annual figure short on a large weekly bill.
+WEEKS_PER_MONTH = 52 / 12
+
 CYCLE_TO_MONTHLY = {
-    BillingCycle.weekly: lambda a: a * 4.33,
+    BillingCycle.weekly: lambda a: a * WEEKS_PER_MONTH,
     BillingCycle.yearly: lambda a: a / 12,
     BillingCycle.monthly: lambda a: a,
 }

@@ -81,11 +81,23 @@ export async function disconnectGmail(token: string) {
 }
 
 // Detected subscriptions (review queue)
-export async function getDetected(token: string) {
-  const res = await fetch(`${API_URL}/detected/`, {
+export async function getDetected(
+  token: string,
+  status: 'pending' | 'dismissed' = 'pending'
+) {
+  const res = await fetch(`${API_URL}/detected/?status=${status}`, {
     headers: await getHeaders(token),
   })
   if (!res.ok) throw new Error('Failed to fetch detected subscriptions')
+  return res.json()
+}
+
+export async function restoreDetected(token: string, id: string) {
+  const res = await fetch(`${API_URL}/detected/${id}/restore`, {
+    method: 'POST',
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to restore')
   return res.json()
 }
 

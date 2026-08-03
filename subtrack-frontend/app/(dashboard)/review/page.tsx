@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ArrowUpRight, Check, Mail, X } from 'lucide-react'
+import { ArrowUpRight, Check, Mail, RotateCcw, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import {
   approveDetected,
   dismissDetected,
   getDetected,
   getGmailStatus,
+  restoreDetected,
   startGmailScan,
 } from '@/lib/api'
 import type { DetectedSubscription, GmailStatus } from '@/types'
@@ -19,8 +20,12 @@ function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
 }
 
+// 52 weeks / 12 months. Using 4.33 loses ~0.04 of a week each month, which
+// compounds to a visibly short annual figure on a large weekly bill like rent.
+const WEEKS_PER_MONTH = 52 / 12
+
 function toMonthly(amount: number, cycle: string) {
-  if (cycle === 'weekly') return amount * 4.33
+  if (cycle === 'weekly') return amount * WEEKS_PER_MONTH
   if (cycle === 'yearly') return amount / 12
   return amount
 }
@@ -35,21 +40,24 @@ export default function ReviewPage() {
   const [gmail, setGmail] = useState<GmailStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
+  const [tab, setTab] = useState<'pending' | 'dismissed'>('pending')
   const [shares, setShares] = useState<Record<string, number>>({})
   const [custom, setCustom] = useState<Record<string, string>>({})
 
   async function load() {
     const t = await token()
     if (!t) return
-    const [detected, status] = await Promise.all([getDetected(t), getGmailStatus(t)])
+    const [detected, status] = await Promise.all([getDetected(t, tab), getGmailStatus(t)])
     setItems(detected)
     setGmail(status)
     return status as GmailStatus
   }
 
   useEffect(() => {
+    setLoading(true)
     load().finally(() => setLoading(false))
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab])
 
   // Per-detection share of the bill. A receipt shows the whole cost, but the
   // user may only pay part of it (rent split with housemates, a shared energy
@@ -84,7 +92,22 @@ export default function ReviewPage() {
     if (gmail?.scan_status !== 'running') return
     const timer = setInterval(() => { load() }, 4000)
     return () => clearInterval(timer)
+    // `load` is redefined every render; depending on it would restart the
+    // interval constantly. The scan status is the only real trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gmail?.scan_status])
+
+  async function restore(id: string) {
+    const t = await token()
+    if (!t) return
+    setBusy(id)
+    try {
+      await restoreDetected(t, id)
+      setItems(prev => prev.filter(i => i.id !== id))
+    } finally {
+      setBusy(null)
+    }
+  }
 
   async function resolve(id: string, action: 'approve' | 'dismiss') {
     const t = await token()
@@ -157,6 +180,30 @@ export default function ReviewPage() {
           )}
         </section>
 
+        {/* Dismissing is deliberately sticky — a rescan won't resurface it —
+            so there has to be a way back to what you rejected. */}
+        {gmail?.connected && (
+          <div className="flex gap-1 border-b border-border">
+            {([
+              { key: 'pending', label: 'To review' },
+              { key: 'dismissed', label: 'Dismissed' },
+            ] as const).map(t => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setTab(t.key)}
+                className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+                  tab === t.key
+                    ? 'border-primary text-foreground'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {!gmail?.connected ? (
           <div className="rounded-2xl bg-card p-6 shadow-md">
             <div className="flex items-start gap-3">
@@ -197,11 +244,15 @@ export default function ReviewPage() {
         {items.length === 0 && !scanning && gmail?.connected ? (
           <div className="flex min-h-[200px] items-center justify-center rounded-2xl border border-dashed border-border bg-muted/30">
             <div className="text-center">
-              <p className="text-sm font-medium text-foreground">Nothing to review</p>
+              <p className="text-sm font-medium text-foreground">
+                {tab === 'dismissed' ? 'Nothing dismissed' : 'Nothing to review'}
+              </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {gmail.last_scanned_at
-                  ? 'Everything found has been approved or dismissed.'
-                  : 'Run a scan to look for subscriptions in your email.'}
+                {tab === 'dismissed'
+                  ? "Detections you dismiss show up here so you can check or restore them."
+                  : gmail.last_scanned_at
+                    ? 'Everything found has been approved or dismissed.'
+                    : 'Run a scan to look for subscriptions in your email.'}
               </p>
             </div>
           </div>
@@ -304,7 +355,9 @@ export default function ReviewPage() {
 
                       {/* Receipts show the whole bill. Shared costs — rent,
                           household utilities — need only the user's portion. */}
-                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      <div className={`flex-wrap items-center gap-1.5 pt-1 ${
+                        tab === 'dismissed' ? 'hidden' : 'flex'
+                      }`}>
                         <span className="mr-1 text-xs text-muted-foreground">
                           I pay
                         </span>
@@ -349,24 +402,38 @@ export default function ReviewPage() {
                     </div>
 
                     <div className="flex shrink-0 gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() => resolve(item.id, 'approve')}
-                        disabled={busy === item.id}
-                      >
-                        <Check className="mr-1 h-3.5 w-3.5" />
-                        {isPriceChange ? 'Update' : 'Add'}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => resolve(item.id, 'dismiss')}
-                        disabled={busy === item.id}
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <X className="mr-1 h-3.5 w-3.5" />
-                        Dismiss
-                      </Button>
+                      {tab === 'dismissed' ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => restore(item.id)}
+                          disabled={busy === item.id}
+                        >
+                          <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                          Restore
+                        </Button>
+                      ) : (
+                        <>
+                          <Button
+                            size="sm"
+                            onClick={() => resolve(item.id, 'approve')}
+                            disabled={busy === item.id}
+                          >
+                            <Check className="mr-1 h-3.5 w-3.5" />
+                            {isPriceChange ? 'Update' : 'Add'}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => resolve(item.id, 'dismiss')}
+                            disabled={busy === item.id}
+                            className="text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="mr-1 h-3.5 w-3.5" />
+                            Dismiss
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
