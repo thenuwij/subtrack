@@ -183,6 +183,9 @@ def gmail_callback(code: str, state: str, db: Session = Depends(get_db)):
 
 AMOUNT_TOLERANCE = 0.05  # ignore sub-5-cent differences (rounding, FX wobble)
 
+FIRST_SCAN_MONTHS = 6
+RESCAN_MONTHS = 3
+
 
 def _run_scan(user_id: str):
     """The scan itself. Runs as a background task with its own DB session —
@@ -198,9 +201,18 @@ def _run_scan(user_id: str):
         if not account:
             return
 
+        # The first scan needs enough history to spot bills that only arrive
+        # every few months — energy, water, insurance, annual plans. Measured on
+        # a real inbox, a 3-month window sees an every-2-months energy bill just
+        # once, which isn't enough to establish a cycle, so it disappears
+        # silently. Later scans can be shallower: those bills are already
+        # tracked, and a rescan only needs to catch what is new or has changed.
+        first_scan = account.last_scanned_at is None
+        months = FIRST_SCAN_MONTHS if first_scan else RESCAN_MONTHS
+
         try:
             candidates = scan(decrypt_token(account.refresh_token_encrypted),
-                              months=6, max_messages=300)
+                              months=months, max_messages=400)
             detected = analyze(candidates)
         except Exception as exc:
             logger.error("Scan failed for %s: %s", user_id, exc)
