@@ -109,27 +109,44 @@ export default function ReviewPage() {
     }
   }
 
+  // When a detection looks like a service the user already tracks, Add becomes
+  // a question rather than an action — replacing the wrong row silently would
+  // be worse than an extra one.
+  const [choosing, setChoosing] = useState<string | null>(null)
+
+  async function approveWith(id: string, replaceId?: string) {
+    const t = await token()
+    if (!t) return
+    setBusy(id)
+    try {
+      const item = items.find(i => i.id === id)
+      const fixed = item ? fixedShare(id, item.amount) : null
+      const ratio = shares[id]
+      await approveDetected(t, id, {
+        ...(fixed !== null
+          ? { share_amount: fixed }
+          : ratio && ratio < 1
+            ? { share_ratio: ratio }
+            : {}),
+        ...(replaceId ? { replace_subscription_id: replaceId } : {}),
+      })
+      setItems(prev => prev.filter(i => i.id !== id))
+      setChoosing(null)
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function resolve(id: string, action: 'approve' | 'dismiss') {
     const t = await token()
     if (!t) return
     setBusy(id)
     try {
       if (action === 'approve') {
-        // Only send a split when the bill is actually shared — omitting both
-        // stores the full amount, which is the common case.
-        const item = items.find(i => i.id === id)
-        const fixed = item ? fixedShare(id, item.amount) : null
-        const ratio = shares[id]
-        await approveDetected(
-          t,
-          id,
-          fixed !== null
-            ? { share_amount: fixed }
-            : ratio && ratio < 1
-              ? { share_ratio: ratio }
-              : {}
-        )
-      } else await dismissDetected(t, id)
+        await approveWith(id)
+        return
+      }
+      await dismissDetected(t, id)
       // Drop it locally rather than refetching — the row is gone either way.
       setItems(prev => prev.filter(i => i.id !== id))
     } finally {
@@ -359,6 +376,57 @@ export default function ReviewPage() {
                         </p>
                       )}
 
+                      {item.similar_subscription_id && (
+                        <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-3">
+                          <p className="text-xs text-foreground">
+                            Looks like{' '}
+                            <span className="font-medium">{item.similar_name}</span>
+                            {item.similar_amount !== null && (
+                              <>
+                                {' '}({formatCurrency(item.similar_amount, item.currency)}/
+                                {item.similar_cycle})
+                              </>
+                            )}
+                            , which you already track.
+                          </p>
+                          {item.similar_reason && (
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {item.similar_reason}
+                            </p>
+                          )}
+                          {choosing === item.id && (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <Button
+                                size="sm"
+                                onClick={() =>
+                                  approveWith(item.id, item.similar_subscription_id!)
+                                }
+                                disabled={busy === item.id}
+                              >
+                                Replace {item.similar_name}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => approveWith(item.id)}
+                                disabled={busy === item.id}
+                              >
+                                Keep both
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setChoosing(null)}
+                                disabled={busy === item.id}
+                                className="text-muted-foreground"
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       {/* An agreed uneven split doesn't rescale on its own —
                           who covers an increase is for the housemates to
                           decide, so say what happens if they do nothing. */}
@@ -436,7 +504,11 @@ export default function ReviewPage() {
                         <>
                           <Button
                             size="sm"
-                            onClick={() => resolve(item.id, 'approve')}
+                            onClick={() =>
+                              item.similar_subscription_id && choosing !== item.id
+                                ? setChoosing(item.id)
+                                : resolve(item.id, 'approve')
+                            }
                             disabled={busy === item.id}
                           >
                             <Check className="mr-1 h-3.5 w-3.5" />

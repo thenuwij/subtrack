@@ -111,6 +111,7 @@ export async function approveDetected(
     cycle?: string
     share_ratio?: number
     share_amount?: number
+    replace_subscription_id?: string
   } = {}
 ) {
   const res = await fetch(`${API_URL}/detected/${id}/approve`, {
@@ -128,6 +129,24 @@ export async function dismissDetected(token: string, id: string) {
     headers: await getHeaders(token),
   })
   if (!res.ok) throw new Error('Failed to dismiss')
+  return res.json()
+}
+
+export async function getDuplicates(token: string) {
+  const res = await fetch(`${API_URL}/subscriptions/duplicates`, {
+    headers: await getHeaders(token),
+  })
+  if (!res.ok) throw new Error('Failed to check for duplicates')
+  return res.json()
+}
+
+export async function mergeSubscription(token: string, id: string, into: string) {
+  const res = await fetch(`${API_URL}/subscriptions/${id}/merge`, {
+    method: 'POST',
+    headers: await getHeaders(token),
+    body: JSON.stringify({ into }),
+  })
+  if (!res.ok) throw new Error('Failed to merge')
   return res.json()
 }
 

@@ -121,6 +121,11 @@ class DetectedSubscription(Base):
     # Set when this looks like a price change to a subscription the user
     # already tracks; approving updates that row instead of creating one.
     existing_subscription_id = Column(UUID(as_uuid=True), nullable=True)
+    # A subscription that appears to be the SAME service under a different name
+    # ("Claude" vs "Anthropic"), which no amount of string matching would find.
+    # Only a suggestion: the user chooses replace or keep both.
+    similar_subscription_id = Column(UUID(as_uuid=True), nullable=True)
+    similar_reason = Column(String, nullable=True)
     status = Column(Enum(DetectionStatus), default=DetectionStatus.pending, index=True)
     detected_at = Column(DateTime, server_default=func.now())
     resolved_at = Column(DateTime, nullable=True)

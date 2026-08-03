@@ -205,6 +205,80 @@ def update_subscription(
     db.refresh(sub)
     return sub
 
+@router.get("/duplicates")
+def get_duplicates(
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db)
+):
+    """Pairs in the user's own list that look like the same service.
+
+    Detection can produce "Claude" and "Anthropic (Claude)" as separate rows,
+    which quietly double-counts the cost. Suggestions only — merging is the
+    user's call.
+    """
+    from app.gmail.analyzer import find_duplicates
+
+    subs = db.query(Subscription).filter(
+        Subscription.user_id == user_id,
+        Subscription.is_active == True      # noqa: E712
+    ).order_by(Subscription.name).all()
+
+    def brief(s):
+        return {
+            "id": str(s.id), "name": s.name, "amount": s.amount,
+            "currency": s.currency,
+            "cycle": s.cycle.value if hasattr(s.cycle, "value") else s.cycle,
+        }
+
+    return [
+        {"keep": brief(subs[k]), "merge": brief(subs[m]), "reason": reason}
+        for k, m, reason in find_duplicates(subs)
+    ]
+
+
+class MergeRequest(BaseModel):
+    into: UUID
+
+
+@router.post("/{sub_id}/merge")
+def merge_subscription(
+    sub_id: UUID,
+    body: MergeRequest,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db)
+):
+    """Fold one subscription into another, keeping the target's own details.
+
+    History is reassigned rather than deleted so the change log stays intact.
+    """
+    if sub_id == body.into:
+        raise HTTPException(status_code=400, detail="Cannot merge a subscription into itself")
+
+    source, target = (
+        db.query(Subscription).filter(
+            Subscription.id == ident, Subscription.user_id == user_id
+        ).first()
+        for ident in (sub_id, body.into)
+    )
+    if not source or not target:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+
+    # Keep the source's source_key if the target has none, so future scans can
+    # still recognise the merged subscription.
+    if not target.source_key and source.source_key:
+        target.source_key = source.source_key
+        target.source_domain = source.source_domain
+
+    db.query(SubscriptionChange).filter(
+        SubscriptionChange.subscription_id == source.id
+    ).update({SubscriptionChange.subscription_id: target.id})
+
+    db.delete(source)
+    db.commit()
+    db.refresh(target)
+    return {"merged": True, "into": str(target.id), "name": target.name}
+
+
 @router.delete("/{sub_id}")
 def delete_subscription(
     sub_id: UUID,

@@ -341,6 +341,20 @@ def _run_scan(user_id: str):
             row.status = DetectionStatus.pending
             row.resolved_at = None
 
+        # Flag detections that duplicate something already tracked under a
+        # different name. Done after the rows exist so every pending suggestion
+        # is checked, not just the ones from this scan.
+        db.flush()
+        pending = [r for r in existing_detections if r.status == DetectionStatus.pending]
+        active = [s for s in subscriptions if s.is_active]
+        if pending and active:
+            for i, (j, reason) in find_similar(pending, active).items():
+                # An exact price-change match is stronger evidence than a
+                # name-similarity guess, so don't overwrite it.
+                if pending[i].existing_subscription_id is None:
+                    pending[i].similar_subscription_id = active[j].id
+                    pending[i].similar_reason = reason[:300]
+
         account.scan_status = "done"
         account.scan_error = None
         account.last_scanned_at = datetime.utcnow()

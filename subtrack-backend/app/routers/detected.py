@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/detected", tags=["detected"])
 
 
-def _serialize(d: DetectedSubscription, tracked: Optional[Subscription] = None) -> dict:
+def _serialize(d: DetectedSubscription, tracked: Optional[Subscription] = None,
+               similar: Optional[Subscription] = None) -> dict:
     return {
         # For a price change, what the user currently pays and how it's split —
         # so the review card can show "you pay 320 of this" rather than making
@@ -58,6 +59,15 @@ def _serialize(d: DetectedSubscription, tracked: Optional[Subscription] = None) 
         "charge_count": d.charge_count,
         "existing_subscription_id": str(d.existing_subscription_id)
             if d.existing_subscription_id else None,
+        # A subscription that looks like the same service under another name.
+        # Surfaced as a choice, never applied automatically.
+        "similar_subscription_id": str(d.similar_subscription_id)
+            if d.similar_subscription_id else None,
+        "similar_reason": d.similar_reason,
+        "similar_name": similar.name if similar else None,
+        "similar_amount": similar.amount if similar else None,
+        "similar_cycle": (similar.cycle.value if hasattr(similar.cycle, "value") else similar.cycle)
+            if similar else None,
         "detected_at": d.detected_at.isoformat() if d.detected_at else None,
     }
 
@@ -86,12 +96,16 @@ def list_detections(
         DetectedSubscription.status == status,
     ).order_by(DetectedSubscription.charge_count.desc()).all()
 
-    tracked_ids = {d.existing_subscription_id for d in pending if d.existing_subscription_id}
-    tracked = {
-        s.id: s for s in db.query(Subscription).filter(Subscription.id.in_(tracked_ids)).all()
-    } if tracked_ids else {}
+    wanted = {d.existing_subscription_id for d in pending if d.existing_subscription_id}
+    wanted |= {d.similar_subscription_id for d in pending if d.similar_subscription_id}
+    subs = {
+        s.id: s for s in db.query(Subscription).filter(Subscription.id.in_(wanted)).all()
+    } if wanted else {}
 
-    return [_serialize(d, tracked.get(d.existing_subscription_id)) for d in pending]
+    return [
+        _serialize(d, subs.get(d.existing_subscription_id), subs.get(d.similar_subscription_id))
+        for d in pending
+    ]
 
 
 class ApproveOverrides(BaseModel):
@@ -108,6 +122,9 @@ class ApproveOverrides(BaseModel):
     # An agreed uneven amount (rent split 320/320/410). Unlike a ratio this is
     # pinned: a later increase to the bill does not silently rescale it.
     share_amount: Optional[float] = Field(default=None, gt=0)
+    # The user's answer to "this looks like your existing X": the id to fold
+    # this into, or None to add it as a separate subscription.
+    replace_subscription_id: Optional[UUID] = None
 
 
 @router.post("/{detection_id}/approve")
@@ -128,10 +145,13 @@ def approve(
     billed = overrides.amount if overrides.amount is not None else detection.amount
     split = resolve_split(billed, overrides.share_ratio, overrides.share_amount)
 
-    if detection.existing_subscription_id:
-        # A price change to something already tracked: update, don't duplicate.
+    # Either an automatic price-change match, or the subscription the user chose
+    # to replace when told this looks like a service they already track.
+    target_id = overrides.replace_subscription_id or detection.existing_subscription_id
+
+    if target_id:
         sub = db.query(Subscription).filter(
-            Subscription.id == detection.existing_subscription_id,
+            Subscription.id == target_id,
             Subscription.user_id == user_id,
         ).first()
         if not sub:

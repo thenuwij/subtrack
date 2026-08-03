@@ -81,7 +81,14 @@ export interface DetectedSubscription {
   current_amount: number | null                       // what you pay today, if tracked
   current_split_mode: 'full' | 'ratio' | 'fixed' | null
   current_name: string | null                         // name of the subscription it will update
-  current_cycle: string | null   // set when this is a price change
+  current_cycle: string | null
+  // A tracked subscription that looks like the same service under a different
+  // name (e.g. "Claude" vs "Anthropic"). Offered as a choice, never applied.
+  similar_subscription_id: string | null
+  similar_reason: string | null
+  similar_name: string | null
+  similar_amount: number | null
+  similar_cycle: string | null   // set when this is a price change
   detected_at: string
 }
 
@@ -128,4 +135,17 @@ export interface SavingsGoal {
   created_by: string
   created_at: string
   completed_at: string | null
+}
+export interface DuplicateBrief {
+  id: string
+  name: string
+  amount: number
+  currency: string
+  cycle: string
+}
+
+export interface DuplicatePair {
+  keep: DuplicateBrief
+  merge: DuplicateBrief
+  reason: string
 }

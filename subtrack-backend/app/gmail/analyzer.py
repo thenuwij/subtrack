@@ -232,3 +232,163 @@ def _dedupe(subs: list[DetectedSubscription]) -> list[DetectedSubscription]:
     merged = list(best.values())
     merged.sort(key=lambda s: (-s.charge_count, s.merchant.lower()))
     return merged
+
+
+class SimilarMatch(BaseModel):
+    detection_index: int = Field(description="Index of the detection in the list shown")
+    subscription_index: int | None = Field(
+        description="Index of the tracked subscription that is the SAME service, "
+                    "or null if none of them are."
+    )
+    reason: str = Field(
+        description="One short sentence a user would understand, e.g. "
+                    "\"Claude is Anthropic's product — same service.\" Empty if no match."
+    )
+
+
+class SimilarityResult(BaseModel):
+    matches: list[SimilarMatch]
+
+
+SIMILARITY_SYSTEM = """You match newly detected bills against the subscriptions a \
+person already tracks, so the app doesn't create a duplicate entry for a service \
+they already have.
+
+Two entries are the SAME service when a person would say they're paying for one \
+thing, not two — even if the names look nothing alike:
+- A product and its company: "Claude" and "Anthropic", "ChatGPT" and "OpenAI".
+- The same service named loosely vs precisely: "Apple" at $6.99 and "Apple Music".
+- The same provider billed through different channels: direct vs via a payment \
+processor or app store.
+
+They are DIFFERENT when the same provider sells separate things the person pays \
+for independently — Apple Music and iCloud storage are two subscriptions, not one, \
+even though both are Apple.
+
+Amounts are a hint, not proof: a price can change, and a shared bill is recorded \
+at the user's share rather than the full amount. Cycle mismatches (monthly vs \
+yearly) usually mean different plans.
+
+If you are not confident it's the same service, return null. A wrong match \
+silently overwrites something the user is tracking; a missed one just means an \
+extra row they can merge themselves."""
+
+
+def find_similar(
+    detections: list,
+    subscriptions: list,
+) -> dict[int, tuple[int, str]]:
+    """Map detection index -> (subscription index, reason) for same-service pairs.
+
+    Text matching cannot connect "Claude Pro" to a subscription called
+    "Anthropic" — knowing they are one service is world knowledge, which is why
+    this asks the model rather than comparing strings.
+    """
+    if not detections or not subscriptions:
+        return {}
+
+    def cycle_of(x):
+        return x.cycle.value if hasattr(x.cycle, "value") else x.cycle
+
+    tracked = "\n".join(
+        f"  [{i}] {s.name} — {s.currency} {s.amount:.2f}/{cycle_of(s)}"
+        for i, s in enumerate(subscriptions)
+    )
+    found = "\n".join(
+        f"  [{i}] {d.merchant} — {d.currency} {d.amount:.2f}/{cycle_of(d)} (from {d.sender_domain})"
+        for i, d in enumerate(detections)
+    )
+
+    try:
+        response = client.messages.parse(
+            model=MODEL,
+            max_tokens=8000,
+            output_config={"effort": "low"},
+            output_format=SimilarityResult,
+            system=SIMILARITY_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Already tracked:\n{tracked}\n\n"
+                    f"Newly detected:\n{found}\n\n"
+                    "For each detection, say which tracked subscription is the same "
+                    "service, or null."
+                ),
+            }],
+        )
+    except Exception as exc:
+        logger.error("Similarity check failed: %s: %s", type(exc).__name__, exc)
+        return {}
+
+    if response.stop_reason == "refusal" or response.parsed_output is None:
+        return {}
+
+    out: dict[int, tuple[int, str]] = {}
+    for m in response.parsed_output.matches:
+        if m.subscription_index is None:
+            continue
+        if 0 <= m.detection_index < len(detections) and 0 <= m.subscription_index < len(subscriptions):
+            out[m.detection_index] = (m.subscription_index, m.reason)
+    return out
+
+
+class DuplicatePair(BaseModel):
+    keep_index: int = Field(description="Index of the entry to keep — the better-named one")
+    merge_index: int = Field(description="Index of the duplicate to fold into it")
+    reason: str = Field(description="One short sentence explaining why they're the same service")
+
+
+class DuplicateResult(BaseModel):
+    duplicates: list[DuplicatePair]
+
+
+def find_duplicates(subscriptions: list) -> list[tuple[int, int, str]]:
+    """Find pairs in the user's own list that are the same service.
+
+    A first scan can easily produce "Claude" and "Anthropic (Claude)" as two
+    rows, which double-counts the cost. Returns (keep, merge, reason) triples.
+    """
+    if len(subscriptions) < 2:
+        return []
+
+    def cycle_of(x):
+        return x.cycle.value if hasattr(x.cycle, "value") else x.cycle
+
+    listing = "\n".join(
+        f"  [{i}] {s.name} — {s.currency} {s.amount:.2f}/{cycle_of(s)}"
+        for i, s in enumerate(subscriptions)
+    )
+
+    try:
+        response = client.messages.parse(
+            model=MODEL,
+            max_tokens=8000,
+            output_config={"effort": "low"},
+            output_format=DuplicateResult,
+            system=SIMILARITY_SYSTEM + "\n\nHere you are checking one list against "
+                   "itself. Report a pair only when both rows are the same service and "
+                   "keeping both would double-count the cost. Prefer keeping the more "
+                   "specific name. Never pair a row with itself.",
+            messages=[{"role": "user", "content":
+                       f"Tracked subscriptions:\n{listing}\n\n"
+                       "Which pairs are the same service?"}],
+        )
+    except Exception as exc:
+        logger.error("Duplicate check failed: %s: %s", type(exc).__name__, exc)
+        return []
+
+    if response.stop_reason == "refusal" or response.parsed_output is None:
+        return []
+
+    n = len(subscriptions)
+    seen: set[int] = set()
+    out: list[tuple[int, int, str]] = []
+    for pair in response.parsed_output.duplicates:
+        k, m = pair.keep_index, pair.merge_index
+        if k == m or not (0 <= k < n and 0 <= m < n):
+            continue
+        if k in seen or m in seen:      # keep each row in at most one pair
+            continue
+        seen.update({k, m})
+        out.append((k, m, pair.reason))
+    return out
