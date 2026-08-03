@@ -66,6 +66,12 @@ export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
           <p className="text-xs text-muted-foreground mt-0.5">
             {subscription.category}
             {nextDate && <span className="ml-1.5">· next {nextDate}</span>}
+            {subscription.full_amount != null && (
+              <span className="ml-1.5">
+                · your share of{' '}
+                {formatCurrency(subscription.full_amount, subscription.currency)}
+              </span>
+            )}
           </p>
         </div>
       </div>

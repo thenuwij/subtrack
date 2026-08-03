@@ -26,7 +26,15 @@ class Subscription(Base):
     user_id = Column(String, nullable=False, index=True)
     name = Column(String, nullable=False)
     category = Column(Enum(Category), nullable=False)
+    # `amount` is always what THIS user pays. For a shared bill that's their
+    # share, so every total downstream stays correct without special-casing.
     amount = Column(Float, nullable=False)
+    # The whole bill, when it's split with other people. Null means the user
+    # pays all of it. Kept so rescans can compare receipts against the real
+    # cost — comparing a receipt to someone's share would flag a price change
+    # on every single scan.
+    full_amount = Column(Float, nullable=True)
+    share_ratio = Column(Float, default=1.0)          # amount = full_amount * share_ratio
     currency = Column(String, default="AUD")
     exchange_rate = Column(Float, default=1.0)        # rate used at time of entry
     converted_amount = Column(Float, nullable=True)   # amount in user's base currency

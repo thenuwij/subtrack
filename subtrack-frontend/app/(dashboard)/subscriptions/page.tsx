@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { getSubscriptions, createSubscription, deleteSubscription, updateSubscription } from '@/lib/api'
-import { Subscription } from '@/types'
+import { Subscription, SubscriptionInput } from '@/types'
 import { SubscriptionCard }       from '@/components/subscriptions/SubscriptionCard'
 import { AddSubscriptionModal }   from '@/components/subscriptions/AddSubscriptionModal'
 import { FilterBar }              from '@/components/shared/FilterBar'
@@ -77,7 +77,7 @@ export default function SubscriptionsPage() {
 
   // ── add ────────────────────────────────────────────────────────────────────
 
-  async function handleAdd(formData: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) {
+  async function handleAdd(formData: SubscriptionInput) {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
     const created = await createSubscription(session.access_token, formData)
@@ -87,7 +87,7 @@ export default function SubscriptionsPage() {
 
   // ── update ─────────────────────────────────────────────────────────────────
 
-  async function handleEdit(formData: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) {
+  async function handleEdit(formData: SubscriptionInput) {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session || !editingSubscription) throw new Error('Not authenticated')
     const updated = await updateSubscription(session.access_token, editingSubscription.id, formData)

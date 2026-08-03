@@ -258,7 +258,11 @@ def _run_scan(user_id: str):
             tracked = subs_by_name.get(found.merchant.lower().strip())
             existing_sub_id = None
             if tracked is not None:
-                if abs(tracked.amount - found.amount) <= AMOUNT_TOLERANCE:
+                # Compare against the whole bill, not the user's share. A rent
+                # receipt reads $1,050 while a third-share subscription stores
+                # $350 — comparing those would flag a price change every scan.
+                tracked_billed = tracked.full_amount or tracked.amount
+                if abs(tracked_billed - found.amount) <= AMOUNT_TOLERANCE:
                     continue  # already tracked at this price — nothing to review
                 existing_sub_id = tracked.id  # tracked, but the price moved
 

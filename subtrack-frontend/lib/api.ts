@@ -92,7 +92,13 @@ export async function getDetected(token: string) {
 export async function approveDetected(
   token: string,
   id: string,
-  overrides: { name?: string; category?: string; amount?: number; cycle?: string } = {}
+  overrides: {
+    name?: string
+    category?: string
+    amount?: number
+    cycle?: string
+    share_ratio?: number
+  } = {}
 ) {
   const res = await fetch(`${API_URL}/detected/${id}/approve`, {
     method: 'POST',

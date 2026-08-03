@@ -11,7 +11,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -24,7 +24,7 @@ from app.models import (
     DetectionStatus,
     Subscription,
 )
-from app.routers.subscriptions import log_change, monthly_equivalent
+from app.routers.subscriptions import apply_share, log_change, monthly_equivalent
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,11 @@ class ApproveOverrides(BaseModel):
     category: Optional[Category] = None
     amount: Optional[float] = None
     cycle: Optional[BillingCycle] = None
+    # Shared bills: the receipt is the whole cost, but the user may only pay a
+    # portion of it (rent split three ways, a household energy bill). Storing
+    # the ratio rather than a corrected amount keeps future scans from reading
+    # the difference as a price change.
+    share_ratio: Optional[float] = Field(default=None, gt=0, le=1)
 
 
 @router.post("/{detection_id}/approve")
@@ -92,9 +97,13 @@ def approve(
     detection = _get_pending(db, user_id, detection_id)
 
     name = overrides.name or detection.merchant
-    amount = overrides.amount if overrides.amount is not None else detection.amount
     cycle = overrides.cycle or detection.cycle
     category = overrides.category or detection.category
+
+    # The receipt is the full bill. If the user only pays part of it, `amount`
+    # becomes their share and the full cost is kept for future scan comparisons.
+    billed = overrides.amount if overrides.amount is not None else detection.amount
+    amount, full_amount, share_ratio = apply_share(billed, overrides.share_ratio, billed)
 
     if detection.existing_subscription_id:
         # A price change to something already tracked: update, don't duplicate.
@@ -106,7 +115,13 @@ def approve(
             raise HTTPException(status_code=404, detail="Tracked subscription no longer exists")
 
         before = monthly_equivalent(sub.amount, sub.cycle)
+        # Keep an existing split unless this approval sets a new one — a price
+        # rise on a shared bill should stay shared.
+        if overrides.share_ratio is None and sub.share_ratio and sub.share_ratio < 1.0:
+            amount, full_amount, share_ratio = apply_share(billed, sub.share_ratio, billed)
         sub.amount = amount
+        sub.full_amount = full_amount
+        sub.share_ratio = share_ratio
         sub.cycle = cycle
         sub.currency = detection.currency
         after = monthly_equivalent(sub.amount, sub.cycle)
@@ -118,6 +133,8 @@ def approve(
             name=name,
             category=category,
             amount=amount,
+            full_amount=full_amount,
+            share_ratio=share_ratio,
             currency=detection.currency,
             exchange_rate=1.0,
             converted_amount=amount,

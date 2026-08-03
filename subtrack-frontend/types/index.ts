@@ -17,7 +17,9 @@ export interface Subscription {
   user_id: string
   name: string
   category: Category
-  amount: number
+  amount: number                   // what YOU pay (your share of a split bill)
+  full_amount: number | null       // the whole bill, when shared; null = you pay it all
+  share_ratio: number              // amount = full_amount * share_ratio
   currency: string
   exchange_rate: number
   converted_amount: number | null  // null for legacy entries
@@ -38,6 +40,8 @@ export interface SubscriptionInput {
   cycle: BillingCycle
   next_due?: string | null
   is_active?: boolean
+  full_amount?: number | null
+  share_ratio?: number
 }
 
 export interface SavingsGoalInput {

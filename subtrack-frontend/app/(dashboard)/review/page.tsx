@@ -35,6 +35,8 @@ export default function ReviewPage() {
   const [gmail, setGmail] = useState<GmailStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
+  const [shares, setShares] = useState<Record<string, number>>({})
+  const [custom, setCustom] = useState<Record<string, string>>({})
 
   async function load() {
     const t = await token()
@@ -49,6 +51,30 @@ export default function ReviewPage() {
     load().finally(() => setLoading(false))
   }, [])
 
+  // Per-detection share of the bill. A receipt shows the whole cost, but the
+  // user may only pay part of it (rent split with housemates, a shared energy
+  // bill), so the split is chosen at review time.
+  const SPLIT_OPTIONS = [
+    { label: 'All', ratio: 1 },
+    { label: '½', ratio: 1 / 2 },
+    { label: '⅓', ratio: 1 / 3 },
+    { label: '¼', ratio: 1 / 4 },
+  ]
+
+  function setShare(id: string, ratio: number) {
+    setShares(prev => ({ ...prev, [id]: ratio }))
+    setCustom(prev => ({ ...prev, [id]: '' }))
+  }
+
+  function setCustomShare(id: string, value: string, billed: number) {
+    setCustom(prev => ({ ...prev, [id]: value }))
+    const mine = parseFloat(value)
+    setShares(prev => ({
+      ...prev,
+      [id]: Number.isFinite(mine) && mine > 0 && mine <= billed ? mine / billed : 1,
+    }))
+  }
+
   // While a scan runs there's nothing to show until it finishes, so poll for it.
   useEffect(() => {
     if (gmail?.scan_status !== 'running') return
@@ -61,8 +87,12 @@ export default function ReviewPage() {
     if (!t) return
     setBusy(id)
     try {
-      if (action === 'approve') await approveDetected(t, id)
-      else await dismissDetected(t, id)
+      if (action === 'approve') {
+        // Only send a ratio when the bill is actually shared — omitting it
+        // stores the full amount, which is the common case.
+        const ratio = shares[id]
+        await approveDetected(t, id, ratio && ratio < 1 ? { share_ratio: ratio } : {})
+      } else await dismissDetected(t, id)
       // Drop it locally rather than refetching — the row is gone either way.
       setItems(prev => prev.filter(i => i.id !== id))
     } finally {
@@ -164,7 +194,10 @@ export default function ReviewPage() {
         ) : (
           <div className="space-y-3">
             {items.map(item => {
-              const monthly = toMonthly(item.amount, item.cycle)
+              const ratio = shares[item.id] ?? 1
+              const myAmount = Math.round(item.amount * ratio * 100) / 100
+              const isShared = ratio < 1
+              const monthly = toMonthly(myAmount, item.cycle)
               const isPriceChange = item.existing_subscription_id !== null
               const rose =
                 item.previous_amount !== null && item.amount > item.previous_amount
@@ -197,7 +230,20 @@ export default function ReviewPage() {
                       </div>
 
                       <p className="text-sm text-muted-foreground">
-                        {formatCurrency(item.amount, item.currency)} / {item.cycle}
+                        {isShared ? (
+                          <>
+                            <span className="line-through opacity-60">
+                              {formatCurrency(item.amount, item.currency)}
+                            </span>{' '}
+                            <span className="font-medium text-foreground">
+                              {formatCurrency(myAmount, item.currency)}
+                            </span>
+                          </>
+                        ) : (
+                          formatCurrency(item.amount, item.currency)
+                        )}
+                        {' / '}
+                        {item.cycle}
                         {item.cycle !== 'monthly' && (
                           <> · {formatCurrency(monthly, item.currency)}/mo</>
                         )}
@@ -225,6 +271,53 @@ export default function ReviewPage() {
                           {isPriceChange && ' — updates your existing subscription'}
                         </p>
                       )}
+
+                      {/* Receipts show the whole bill. Shared costs — rent,
+                          household utilities — need only the user's portion. */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        <span className="mr-1 text-xs text-muted-foreground">
+                          I pay
+                        </span>
+                        {SPLIT_OPTIONS.map(option => {
+                          const active =
+                            Math.abs(ratio - option.ratio) < 0.001 && !custom[item.id]
+                          return (
+                            <button
+                              key={option.label}
+                              type="button"
+                              onClick={() => setShare(item.id, option.ratio)}
+                              className={`rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
+                                active
+                                  ? 'border-primary bg-primary/10 text-primary'
+                                  : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'
+                              }`}
+                            >
+                              {option.label}
+                            </button>
+                          )
+                        })}
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-muted-foreground">or</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max={item.amount}
+                            step="0.01"
+                            inputMode="decimal"
+                            placeholder="exact"
+                            value={custom[item.id] ?? ''}
+                            onChange={e =>
+                              setCustomShare(item.id, e.target.value, item.amount)
+                            }
+                            className="w-20 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                          />
+                        </div>
+                        {isShared && (
+                          <span className="text-xs text-muted-foreground">
+                            of {formatCurrency(item.amount, item.currency)}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex shrink-0 gap-2">

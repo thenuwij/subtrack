@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { BillingCycle, Category, Currency, Subscription } from '@/types'
+import { BillingCycle, Category, Currency, Subscription, SubscriptionInput } from '@/types'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -26,12 +26,13 @@ interface FormState {
   cycle: BillingCycle
   next_due: string
   is_active: boolean
+  share_ratio: number   // 1 = you pay the whole bill
 }
 
 interface Props {
   open: boolean
   onClose: () => void
-  onSubmit: (data: Omit<Subscription, 'id' | 'user_id' | 'created_at'>) => Promise<void>
+  onSubmit: (data: SubscriptionInput) => Promise<void>
   initialData?: Subscription  // when provided = edit mode
 }
 
@@ -47,6 +48,7 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
     cycle: 'monthly',
     next_due: today,
     is_active: true,
+    share_ratio: 1,
   }
 
   // When initialData changes (modal opens for edit), pre-fill the form
@@ -55,13 +57,14 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
     return {
       name: initialData.name,
       category: initialData.category,
-      amount: initialData.amount.toString(),
+      amount: (initialData.full_amount ?? initialData.amount).toString(),
       currency: initialData.currency as Currency,
       cycle: initialData.cycle,
       next_due: initialData.next_due
         ? new Date(initialData.next_due).toISOString().split('T')[0]
         : '',
       is_active: initialData.is_active,
+      share_ratio: initialData.share_ratio ?? 1,
     }
   }
 
@@ -108,8 +111,13 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
   }, [form.currency, baseCurrency])
 
   const amount = parseFloat(form.amount)
-  const convertedAmount = !isNaN(amount) && amount > 0
-    ? parseFloat((amount * exchangeRate).toFixed(2))
+  const isShared = form.share_ratio < 1
+  // What the user actually pays — their share of the bill entered above.
+  const myAmount = !isNaN(amount)
+    ? parseFloat((amount * form.share_ratio).toFixed(2))
+    : amount
+  const convertedAmount = !isNaN(myAmount) && myAmount > 0
+    ? parseFloat((myAmount * exchangeRate).toFixed(2))
     : null
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -129,10 +137,14 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
       await onSubmit({
         name: form.name.trim(),
         category: form.category,
-        amount,
+        amount: myAmount,
+        // Shared bill: send the whole cost and the portion this user pays, so
+        // future email scans compare against the real bill, not the share.
+        full_amount: isShared ? amount : null,
+        share_ratio: form.share_ratio,
         currency: form.currency,
         exchange_rate: exchangeRate,
-        converted_amount: form.currency === baseCurrency ? amount : convertedAmount,
+        converted_amount: form.currency === baseCurrency ? myAmount : convertedAmount,
         cycle: form.cycle,
         next_due: form.next_due ? new Date(form.next_due).toISOString() : new Date(today).toISOString(),
         is_active: form.is_active,
@@ -179,7 +191,7 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
 
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
-              <Label htmlFor="sub-amount">Amount</Label>
+              <Label htmlFor="sub-amount">{isShared ? 'Full bill' : 'Amount'}</Label>
               <Input id="sub-amount" type="number" min="0" step="0.01" placeholder="0.00" value={form.amount} onChange={e => set('amount', e.target.value)} disabled={loading} />
             </div>
             <div className="grid gap-1.5">
@@ -191,6 +203,43 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          {/* Shared bills — rent with housemates, a household energy bill.
+              Only the user's share should count toward their totals. */}
+          <div className="grid gap-1.5">
+            <Label>Split</Label>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {[
+                { label: 'I pay all', ratio: 1 },
+                { label: '½', ratio: 1 / 2 },
+                { label: '⅓', ratio: 1 / 3 },
+                { label: '¼', ratio: 1 / 4 },
+              ].map(option => (
+                <button
+                  key={option.label}
+                  type="button"
+                  disabled={loading}
+                  onClick={() => set('share_ratio', option.ratio)}
+                  className={`rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                    Math.abs(form.share_ratio - option.ratio) < 0.001
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            {isShared && !isNaN(amount) && amount > 0 && (
+              <p className="text-xs text-muted-foreground">
+                You pay{' '}
+                <span className="font-medium text-foreground">
+                  {formatCurrency(myAmount, form.currency)}
+                </span>{' '}
+                of {formatCurrency(amount, form.currency)} / {form.cycle}
+              </p>
+            )}
           </div>
 
           {form.currency !== baseCurrency && (
