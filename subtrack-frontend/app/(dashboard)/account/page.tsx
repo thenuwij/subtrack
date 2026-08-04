@@ -16,6 +16,7 @@ import type { GmailStatus } from '@/types'
 import type { User } from '@supabase/supabase-js'
 import type { Currency } from '@/types'
 import { Button } from '@/components/ui/button'
+import { ThemeToggle } from '@/components/layout/ThemeToggle'
 import { toast } from 'sonner'
 
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
@@ -184,7 +185,7 @@ export default function AccountPage() {
       <h1 className="text-2xl font-semibold tracking-tight">Account</h1>
 
       {/* Section 1 — Profile */}
-      <div className="rounded-2xl bg-card shadow-md p-6 space-y-4">
+      <div className="rounded-2xl bg-card shadow-sm p-6 space-y-4">
         <h2 className="text-lg font-semibold">Profile</h2>
 
         <div className="flex items-center gap-4">
@@ -228,10 +229,20 @@ export default function AccountPage() {
       </div>
 
       {/* Section 2 — Preferences */}
-      <div className="rounded-2xl bg-card shadow-md p-6 space-y-4">
+      <div className="rounded-2xl bg-card shadow-sm p-6 space-y-4">
         <h2 className="text-lg font-semibold">Preferences</h2>
 
         <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium">Appearance</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              System follows your device setting
+            </p>
+          </div>
+          <ThemeToggle />
+        </div>
+
+        <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
           <div>
             <p className="text-sm font-medium">Base currency</p>
             <p className="text-xs text-muted-foreground mt-0.5">All amounts are displayed in this currency</p>
@@ -284,7 +295,7 @@ export default function AccountPage() {
 
       {/* Section 3 — Connected inbox */}
       {gmail && (
-        <div id="inbox" className="scroll-mt-6 rounded-2xl bg-card shadow-md p-6 space-y-4">
+        <div id="inbox" className="scroll-mt-6 rounded-2xl bg-card shadow-sm p-6 space-y-4">
           <div>
             <h2 className="text-lg font-semibold">Email connection</h2>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -380,7 +391,7 @@ export default function AccountPage() {
       )}
 
       {/* Section 3 — Account actions */}
-      <div className="rounded-2xl bg-card shadow-md p-6 space-y-4">
+      <div className="rounded-2xl bg-card shadow-sm p-6 space-y-4">
         <h2 className="text-lg font-semibold">Account</h2>
 
         <div className="flex items-center justify-between">
