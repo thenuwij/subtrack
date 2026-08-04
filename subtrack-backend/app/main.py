@@ -40,6 +40,11 @@ app.include_router(detected.router)
 
 @app.on_event("startup")
 def on_startup():
+    # A bad encryption key makes every Gmail scan fail. Surface it at boot,
+    # where a deploy can catch it, instead of at a user's first scan.
+    if settings.google_client_id:
+        from app.gmail.crypto import check_configured
+        check_configured()
     logger.info("Subtrack API started")
 
 @app.get("/")

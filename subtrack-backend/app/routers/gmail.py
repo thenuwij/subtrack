@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal, get_db
-from app.gmail.crypto import decrypt_token, encrypt_token
+from app.gmail.crypto import TokenUndecryptable, decrypt_token, encrypt_token
 from app.middleware.auth import verify_token
 from app.models import (
     DetectedSubscription,
@@ -287,10 +287,21 @@ def _run_scan(user_id: str):
             candidates = scan(decrypt_token(account.refresh_token_encrypted),
                               months=SCAN_MONTHS, max_messages=400)
             detected = analyze(candidates)
-        except Exception as exc:
-            logger.error("Scan failed for %s: %s", user_id, exc)
+        except TokenUndecryptable:
+            # Nothing the user did, and nothing they can fix except reconnect.
+            # Say that, rather than showing them a cryptography error.
+            logger.error("Undecryptable Gmail token for %s — key mismatch", user_id)
             account.scan_status = "error"
-            account.scan_error = str(exc)[:500]
+            account.scan_error = ("Gmail needs reconnecting. Disconnect and connect "
+                                  "again on the Account page.")
+            db.commit()
+            return
+        except Exception as exc:
+            # Internal detail belongs in the log, not on the user's screen.
+            logger.exception("Scan failed for %s", user_id)
+            account.scan_status = "error"
+            account.scan_error = ("Could not finish reading your inbox. Try again, "
+                                  "or reconnect Gmail if it keeps failing.")
             db.commit()
             return
 
