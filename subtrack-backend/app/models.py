@@ -7,6 +7,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -222,6 +223,10 @@ class AgentMessage(Base):
     # constraint makes a double click or network retry safe.
     client_message_id = Column(String(64), nullable=True)
     error_code = Column(String(64), nullable=True)
+    # Structured, allow-listed UI context captured with user messages.  It is
+    # metadata rather than prompt text, and never grants access to a record:
+    # every finance tool still scopes its query to ``user_id``.
+    context_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime,

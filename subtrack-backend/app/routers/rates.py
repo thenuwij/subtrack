@@ -40,6 +40,26 @@ def is_cache_valid(base: str) -> bool:
     age = datetime.utcnow() - _cache[base]["fetched_at"]
     return age < timedelta(hours=1)
 
+
+def get_cached_rate_snapshot(base: str) -> dict | None:
+    """Return the best in-process rate snapshot without doing network I/O.
+
+    The dashboard loads rates when the authenticated layout mounts, so the
+    assistant can normally reuse that exact snapshot.  A stale snapshot is
+    still more honest than silently treating two currencies as equal; callers
+    receive the ``stale`` flag and must label the result as an estimate.
+    """
+    cached = _cache.get(base)
+    if not cached:
+        return None
+    return {
+        "base": base,
+        "rates": cached["rates"],
+        "cached": True,
+        "stale": not is_cache_valid(base),
+        "fetched_at": cached["fetched_at"].isoformat(),
+    }
+
 # ── Route ─────────────────────────────────────────────────────────────────
 
 @router.get("")

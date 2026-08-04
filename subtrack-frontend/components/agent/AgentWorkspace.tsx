@@ -18,6 +18,7 @@ import {
   Check,
   ChevronLeft,
   History,
+  Eye,
   LoaderCircle,
   Maximize2,
   Menu,
@@ -45,6 +46,10 @@ import type {
   AgentThread,
 } from '@/lib/agent/types'
 import { useStoredString } from '@/lib/hooks/useStoredState'
+import {
+  agentPageLabel,
+  useAgentPageContext,
+} from '@/lib/agent/page-context'
 import { LogoMark } from '@/components/layout/Logo'
 import { Button } from '@/components/ui/button'
 import {
@@ -59,11 +64,38 @@ import {
 
 
 const ACTIVE_THREAD_KEY = 'subtrack:agent-active-thread'
-const suggestions = [
-  'What do my recurring payments cost each month?',
-  'Which categories cost me the most?',
-  'What payments are due next?',
-]
+const suggestions = {
+  dashboard: [
+    'What changed in my recurring costs this month?',
+    'Which categories cost me the most?',
+    'What should I review to potentially save money?',
+  ],
+  subscriptions: [
+    'Summarise the recurring payments on this page.',
+    'Are there any possible duplicate records?',
+    'Which of these payments cost the most per month?',
+  ],
+  review: [
+    'Explain what this review queue is for.',
+    'What should I check before approving a detected payment?',
+    'How are shared recurring bills counted?',
+  ],
+  account: [
+    'What share of my income goes to recurring payments?',
+    'What happens when I change my base currency?',
+    'What financial data can you currently analyse?',
+  ],
+  assistant: [
+    'What do my recurring payments cost each month?',
+    'What changed in my recurring costs this month?',
+    'What payments are due next?',
+  ],
+  unknown: [
+    'What do my recurring payments cost each month?',
+    'Which categories cost me the most?',
+    'What payments are due next?',
+  ],
+} as const
 
 interface AgentWorkspaceProps {
   variant: 'panel' | 'page'
@@ -132,6 +164,9 @@ export function AgentWorkspace({
   tokenProvider = accessToken,
 }: AgentWorkspaceProps) {
   const router = useRouter()
+  const pageContext = useAgentPageContext()
+  const relevantPage = pageContext.source_page ?? pageContext.page
+  const pageLabel = agentPageLabel(relevantPage)
   const [activeThreadId, setActiveThreadId, clearActiveThreadId] =
     useStoredString(ACTIVE_THREAD_KEY, '')
   const [threads, setThreads] = useState<AgentThread[]>([])
@@ -310,6 +345,7 @@ export function AgentWorkspace({
         threadId,
         text,
         crypto.randomUUID(),
+        pageContext,
         event => handleStreamEvent(event, assistantId),
         controller.signal
       )
@@ -447,7 +483,7 @@ export function AgentWorkspace({
             {activeThread?.title ?? 'Subtrack assistant'}
           </p>
           <p className="truncate text-[11px] text-muted-foreground">
-            {statusText || 'Your recurring payments, explained'}
+            {statusText || `${pageContext.source_page ? 'Context from' : 'Looking at'} ${pageLabel}`}
           </p>
         </div>
         <Button
@@ -621,7 +657,7 @@ export function AgentWorkspace({
               Ask what changed, where your monthly commitments go, or which payments deserve a closer look.
             </p>
             <div className="mt-6 grid w-full gap-2">
-              {suggestions.map(suggestion => (
+              {suggestions[relevantPage].map(suggestion => (
                 <button
                   type="button"
                   key={suggestion}
@@ -688,6 +724,15 @@ export function AgentWorkspace({
       ) : null}
 
       <footer className={`shrink-0 border-t border-border bg-card p-3 ${variant === 'page' && showHistory ? 'md:pl-[20rem]' : ''}`}>
+        <div className="mx-auto mb-2 flex max-w-2xl items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
+          <Eye className="h-3 w-3" aria-hidden="true" />
+          <span>Context: {pageLabel}</span>
+          {pageContext.selected_subscription_ids.length === 1 ? (
+            <span>· 1 payment selected</span>
+          ) : pageContext.selected_subscription_ids.length > 1 ? (
+            <span>· {pageContext.selected_subscription_ids.length} payments selected</span>
+          ) : null}
+        </div>
         <div className="mx-auto flex max-w-2xl items-end gap-2 rounded-xl border border-border bg-background p-2 shadow-sm focus-within:ring-2 focus-within:ring-ring/30">
           <textarea
             ref={textareaRef}

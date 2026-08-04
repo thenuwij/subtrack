@@ -1,5 +1,6 @@
 import type {
   AgentMessagePage,
+  AgentPageContext,
   AgentStreamEvent,
   AgentThread,
 } from '@/lib/agent/types'
@@ -125,13 +126,18 @@ export function sendAgentMessage(
   threadId: string,
   message: string,
   clientMessageId: string,
+  pageContext: AgentPageContext,
   onEvent: (event: AgentStreamEvent) => void,
   signal?: AbortSignal
 ) {
   return streamEvents({
     token,
     path: `/agent/threads/${threadId}/messages`,
-    body: { message, client_message_id: clientMessageId },
+    body: {
+      message,
+      client_message_id: clientMessageId,
+      page_context: pageContext,
+    },
     signal,
     onEvent,
   })

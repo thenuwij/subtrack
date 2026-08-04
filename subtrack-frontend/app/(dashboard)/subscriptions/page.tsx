@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { getSubscriptions, createSubscription, deleteSubscription, updateSubscription, getDuplicates, mergeSubscription } from '@/lib/api'
-import { DuplicatePair, Subscription, SubscriptionInput } from '@/types'
+import { Category, DuplicatePair, Subscription, SubscriptionInput } from '@/types'
 import { SubscriptionCard }       from '@/components/subscriptions/SubscriptionCard'
 import { AddSubscriptionModal }   from '@/components/subscriptions/AddSubscriptionModal'
 import { FilterBar }              from '@/components/shared/FilterBar'
@@ -14,6 +14,7 @@ import { useCurrency }            from '@/lib/context/currency'
 import { formatCurrency }         from '@/lib/utils/currency'
 import { formatCategory }         from '@/lib/utils/categories'
 import { toast } from 'sonner'
+import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
 
 function monthlyEquivalent(sub: Subscription): number {
   const amount = sub.converted_amount ?? sub.amount
@@ -55,7 +56,7 @@ export default function SubscriptionsPage() {
 
   // filter / sort / group state
   const [search, setSearch]                   = useState('')
-  const [selectedCategory, setSelectedCategory] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState<Category | ''>('')
   const [period, setPeriod]                   = useState<'all' | 'day' | 'week' | 'month'>('all')
   const [fromDate, setFromDate]               = useState('')
   const [toDate, setToDate]                   = useState('')
@@ -164,6 +165,20 @@ export default function SubscriptionsPage() {
     : ''
 
   const isFiltered = !!(search || selectedCategory || period !== 'all' || fromDate || toDate)
+
+  useRegisterAgentPageContext({
+    selected_subscription_ids: editingSubscription ? [editingSubscription.id] : [],
+    visible_subscription_ids: filtered.slice(0, 25).map(subscription => subscription.id),
+    filters: {
+      ...(search ? { search } : {}),
+      ...(selectedCategory ? { category: selectedCategory } : {}),
+      due_period: period,
+      ...(fromDate ? { from_date: fromDate } : {}),
+      ...(toDate ? { to_date: toDate } : {}),
+      sort_order: sortOrder,
+      group_by_category: groupByCategory,
+    },
+  })
 
   // ── grouped render helper ──────────────────────────────────────────────────
 
@@ -309,7 +324,7 @@ export default function SubscriptionsPage() {
           <FilterBar
             categories={categories}
             selectedCategory={selectedCategory}
-            onCategoryChange={setSelectedCategory}
+            onCategoryChange={category => setSelectedCategory(category as Category | '')}
             period={period}
             onPeriodChange={p => setPeriod(p as 'all' | 'day' | 'week' | 'month')}
             fromDate={fromDate}

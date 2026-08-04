@@ -7,6 +7,36 @@ export interface AgentThread {
   updated_at: string
 }
 
+export type AgentPage =
+  | 'dashboard'
+  | 'subscriptions'
+  | 'review'
+  | 'account'
+  | 'assistant'
+  | 'unknown'
+
+export interface AgentPageFilters {
+  search?: string
+  category?: 'streaming' | 'software' | 'cloud' | 'utilities' | 'fitness' | 'food' | 'transport' | 'other'
+  due_period?: 'all' | 'day' | 'week' | 'month'
+  from_date?: string
+  to_date?: string
+  sort_order?: 'asc' | 'desc'
+  group_by_category?: boolean
+  review_status?: 'pending' | 'dismissed'
+}
+
+export interface AgentPageContext {
+  page: AgentPage
+  route: string
+  source_page?: Exclude<AgentPage, 'assistant'>
+  source_route?: string
+  selected_subscription_ids: string[]
+  visible_subscription_ids: string[]
+  visible_detection_ids: string[]
+  filters?: AgentPageFilters
+}
+
 export type AgentMessageStatus =
   | 'completed'
   | 'streaming'
@@ -22,6 +52,7 @@ export interface AgentMessage {
   status: AgentMessageStatus
   reply_to_id: string | null
   error_code: string | null
+  page_context?: AgentPageContext | null
   created_at: string
   updated_at: string
 }

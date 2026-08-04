@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { MessageCircle, X } from 'lucide-react'
 import { AgentWorkspace } from '@/components/agent/AgentWorkspace'
 import { useStoredString } from '@/lib/hooks/useStoredState'
+import { useRememberAgentPageContext } from '@/lib/agent/page-context'
 
 const WIDTH_KEY = 'subtrack:agent-panel-width'
 const MIN_WIDTH = 360
@@ -18,6 +19,7 @@ function clampWidth(value: number) {
 export function AgentChat() {
   const pathname = usePathname()
   const router = useRouter()
+  const rememberPageContext = useRememberAgentPageContext()
   const [open, setOpen] = useState(false)
   const [storedWidth, setStoredWidth] = useStoredString(WIDTH_KEY, String(DEFAULT_WIDTH))
   const parsedWidth = Number(storedWidth)
@@ -91,6 +93,7 @@ export function AgentChat() {
           variant="panel"
           onClose={() => setOpen(false)}
           onOpenFullPage={() => {
+            rememberPageContext()
             setOpen(false)
             router.push('/assistant')
           }}

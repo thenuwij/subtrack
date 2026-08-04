@@ -17,6 +17,7 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { Button } from '@/components/ui/button'
 import { formatCategory } from '@/lib/utils/categories'
 import { toast } from 'sonner'
+import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
@@ -45,6 +46,11 @@ export default function ReviewPage() {
   const [tab, setTab] = useState<'pending' | 'dismissed'>('pending')
   const [shares, setShares] = useState<Record<string, number>>({})
   const [custom, setCustom] = useState<Record<string, string>>({})
+
+  useRegisterAgentPageContext({
+    visible_detection_ids: items.slice(0, 25).map(item => item.id),
+    filters: { review_status: tab },
+  })
 
   async function load() {
     const t = await token()
