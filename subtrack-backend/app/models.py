@@ -90,6 +90,10 @@ class GmailAccount(Base):
     last_scanned_at = Column(DateTime, nullable=True)
     scan_status = Column(String, default="idle")      # idle | running | done | error
     scan_error = Column(String, nullable=True)
+    # When the current scan began. A process that dies mid-scan leaves
+    # scan_status stuck on "running", which would block every future scan
+    # forever; this is what lets a stale run be recognised and superseded.
+    scan_started_at = Column(DateTime, nullable=True)
 
 
 class DetectionStatus(str, enum.Enum):

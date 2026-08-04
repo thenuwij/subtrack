@@ -27,6 +27,8 @@ export default function AccountPage() {
   const [income, setIncome] = useState('')
   const [incomeStatus, setIncomeStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [gmail, setGmail] = useState<GmailStatus | null>(null)
+  // The OAuth callback redirects back here with a reason when connecting fails.
+  const [gmailError, setGmailError] = useState<string | null>(null)
   const [gmailBusy, setGmailBusy] = useState(false)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const { baseCurrency, setBaseCurrency, isLoading } = useCurrency()
@@ -55,6 +57,18 @@ export default function AccountPage() {
       }
     }
     loadGmail()
+
+    // Read (and clear) the outcome the callback redirected with, so a failed
+    // connect explains itself instead of just appearing not to have worked.
+    const params = new URLSearchParams(window.location.search)
+    const failure = params.get('gmail_error')
+    if (failure) {
+      setGmailError(failure)
+      window.history.replaceState({}, '', window.location.pathname)
+    } else if (params.get('gmail') === 'connected') {
+      toast.success('Gmail connected')
+      window.history.replaceState({}, '', window.location.pathname)
+    }
   }, [])
 
   async function withToken<T>(fn: (token: string) => Promise<T>) {
@@ -313,17 +327,30 @@ export default function AccountPage() {
               </div>
             </>
           ) : (
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm font-medium">Connect Gmail</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Find recurring payments from your receipt emails instead of adding them
-                  by hand. Read-only, and nothing is added without your approval.
-                </p>
+            <div className="space-y-3">
+              {/* Connecting happens across a Google redirect, so a failure has
+                  to be reported here or it looks like nothing happened. */}
+              {gmailError && (
+                <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-3">
+                  <p className="text-sm font-medium text-destructive">
+                    Couldn&apos;t connect Gmail
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{gmailError}</p>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium">Connect Gmail</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Find recurring payments from your receipt emails instead of adding them
+                    by hand. Read-only, and nothing is added without your approval.
+                  </p>
+                </div>
+                <Button onClick={handleConnectGmail} disabled={gmailBusy} className="shrink-0">
+                  Connect Gmail
+                </Button>
               </div>
-              <Button onClick={handleConnectGmail} disabled={gmailBusy} className="shrink-0">
-                Connect Gmail
-              </Button>
             </div>
           )}
         </div>

@@ -2,6 +2,7 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 # Google returns scopes in a different order/spelling than requested (and drops
 # any the user declines). Without this, oauthlib aborts the exchange with a raw
@@ -131,33 +132,40 @@ def gmail_callback(code: str, state: str, db: Session = Depends(get_db)):
     """Google redirects here after consent. Unauthenticated by necessity —
     the signed state is what identifies the user."""
     user_id = _verify_state(state)
+    frontend = settings.allowed_origins.split(",")[0]
+
+    def failed(reason: str, detail: str = "") -> RedirectResponse:
+        """Land back in the app with something readable.
+
+        Google has already redirected the browser here, so raising would leave
+        the user staring at raw JSON on an API domain with no way back.
+        """
+        logger.error("Gmail connect failed for %s: %s %s", user_id, reason, detail)
+        return RedirectResponse(f"{frontend}/account?gmail_error={quote(reason)}")
 
     flow = _build_flow()
     try:
         flow.fetch_token(code=code)
     except Exception as exc:
-        logger.warning("Gmail token exchange failed: %s", exc)
-        raise HTTPException(
-            status_code=400,
-            detail=f"Google rejected the authorisation: {exc}",
-        ) from exc
+        return failed(
+            "Google rejected the sign-in. If this account isn't listed under Test "
+            "users on the OAuth consent screen, add it and try again.",
+            str(exc),
+        )
 
     credentials = flow.credentials
 
     granted = set(credentials.scopes or [])
     if GMAIL_READONLY not in granted:
-        raise HTTPException(
-            status_code=400,
-            detail="Gmail read access was not granted. On the Google consent screen, "
-                   "tick the 'View your email messages and settings' checkbox — it is "
-                   "unticked by default. Without it Subtrack cannot read receipts.",
+        return failed(
+            "Gmail access wasn't granted. On the Google screen, tick "
+            "\u201cView your email messages and settings\u201d \u2014 it is unticked by default."
         )
 
     if not credentials.refresh_token:
-        raise HTTPException(
-            status_code=400,
-            detail="Google did not return a refresh token. Revoke Subtrack's access "
-                   "in your Google account and connect again.",
+        return failed(
+            "Google didn't return long-lived access. Remove Subtrack at "
+            "myaccount.google.com/permissions, then connect again."
         )
 
     email_address = ""
@@ -177,14 +185,17 @@ def gmail_callback(code: str, state: str, db: Session = Depends(get_db)):
     db.commit()
 
     logger.info("Gmail connected", extra={"user_id": user_id})
-
-    frontend = settings.allowed_origins.split(",")[0]
     return RedirectResponse(f"{frontend}/account?gmail=connected")
 
 
 AMOUNT_TOLERANCE = 0.05  # ignore sub-5-cent differences (rounding, FX wobble)
 
 SCAN_MONTHS = 6      # deep enough for quarterly and annual bills
+
+# A scan of a large mailbox takes a few minutes. Past this, a run still marked
+# "running" is assumed dead — the process restarted or was redeployed mid-scan —
+# and a new scan is allowed to supersede it.
+STALE_SCAN_MINUTES = 20
 
 
 def _norm(text: str) -> str:
@@ -267,6 +278,18 @@ def _match_detection(rows: list[DetectedSubscription], found) -> DetectedSubscri
                 and row.status == DetectionStatus.pending:
             return row
     return None
+
+
+def _scan_is_stale(account: GmailAccount) -> bool:
+    """Has a scan been marked running for longer than one could possibly take?
+
+    Without this a single crashed scan locks the user out permanently: the
+    endpoint sees "running" and declines to start another, forever.
+    """
+    started = account.scan_started_at
+    if started is None:
+        return True      # pre-dates the timestamp, or never recorded — don't stay stuck
+    return datetime.utcnow() - started > timedelta(minutes=STALE_SCAN_MINUTES)
 
 
 def _run_scan(user_id: str):
@@ -384,11 +407,12 @@ def start_scan(
     account = db.query(GmailAccount).filter(GmailAccount.user_id == user_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="No Gmail account connected")
-    if account.scan_status == "running":
+    if account.scan_status == "running" and not _scan_is_stale(account):
         return {"status": "running"}
 
     account.scan_status = "running"
     account.scan_error = None
+    account.scan_started_at = datetime.utcnow()
     db.commit()
 
     background.add_task(_run_scan, user_id)
