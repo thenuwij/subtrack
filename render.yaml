@@ -1,0 +1,60 @@
+# Render Blueprint for the Subtrack API.
+#
+# The frontend is on Vercel; this is the FastAPI backend it talks to.
+#
+# A note on the plan: a Gmail scan runs as a background task for a few minutes
+# after the HTTP response has already been returned. Render's free instances
+# spin down when idle and can be stopped mid-task, which leaves a scan
+# half-finished. Free is fine for trying it out — the app recovers, since a run
+# stuck on "running" is superseded after 20 minutes — but use `starter` for
+# anything you want to rely on.
+services:
+  - type: web
+    name: subtrack-api
+    runtime: python
+    plan: free
+    rootDir: subtrack-backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # `/` returns the health payload, so Render can tell a live deploy from a
+    # crashed one. Without this a boot failure looks like a slow start.
+    healthCheckPath: /
+    envVars:
+      # Values are deliberately not in this file — sync:false means Render
+      # prompts for each one and stores it, rather than keeping secrets in git.
+      - key: PYTHON_VERSION
+        value: "3.13.5"
+
+      - key: DATABASE_URL           # Neon connection string
+        sync: false
+      - key: SUPABASE_JWT_SECRET    # verifies tokens the frontend sends
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY      # subscription detection
+        sync: false
+
+      # MUST match the value used everywhere else that shares this database.
+      # Refresh tokens are encrypted at rest; a different key cannot read
+      # tokens written by another environment, and a fresh one silently
+      # invalidates every mailbox already connected.
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
+
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      # This exact URL must also be registered in Google Console under
+      # Credentials -> your OAuth client -> Authorised redirect URIs.
+      # e.g. https://subtrack-api.onrender.com/gmail/callback
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+
+      # The frontend origin. CORS blocks every request if this is wrong, and
+      # the Gmail callback redirects back to the first entry.
+      - key: ALLOWED_ORIGINS
+        value: https://subtrack-beryl.vercel.app
+
+      - key: ENVIRONMENT
+        value: production

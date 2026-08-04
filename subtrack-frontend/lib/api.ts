@@ -9,6 +9,48 @@ async function getHeaders(token: string) {
   }
 }
 
+/** True when the app is deployed but still pointed at a local backend. */
+function apiIsLocal() {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)/.test(API_URL)
+}
+
+/**
+ * Fetch that explains itself when it fails.
+ *
+ * A bare `fetch` rejects identically whether the server is unreachable, the
+ * request was blocked by CORS, or the backend returned a real error — so every
+ * one of those surfaced to users as the same unhelpful "please try again".
+ */
+async function request(path: string, token: string, init: RequestInit = {}) {
+  let res: Response
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      ...init,
+      headers: { ...(await getHeaders(token)), ...(init.headers ?? {}) },
+    })
+  } catch {
+    // fetch only rejects for network-level failures: no server, DNS, or CORS.
+    throw new Error(
+      apiIsLocal() && typeof window !== 'undefined'
+        && !/^(localhost|127\.0\.0\.1)/.test(window.location.hostname)
+        ? `This site is pointed at ${API_URL}, which only exists on the developer's `
+          + 'machine. The backend needs deploying and NEXT_PUBLIC_API_URL updating.'
+        : `Could not reach the Subtrack server at ${API_URL}.`
+    )
+  }
+
+  if (!res.ok) {
+    // FastAPI puts the useful part in `detail`.
+    const detail = await res.json().then(b => b?.detail).catch(() => null)
+    throw new Error(
+      typeof detail === 'string' && detail
+        ? detail
+        : `Server returned ${res.status} for ${path}.`
+    )
+  }
+  return res.json()
+}
+
 // Subscriptions
 export async function getSubscriptions(token: string) {
   const res = await fetch(`${API_URL}/subscriptions/`, {
@@ -55,20 +97,11 @@ export async function getGmailStatus(token: string) {
 }
 
 export async function getGmailConnectUrl(token: string) {
-  const res = await fetch(`${API_URL}/gmail/connect`, {
-    headers: await getHeaders(token),
-  })
-  if (!res.ok) throw new Error('Failed to start Gmail connection')
-  return res.json()
+  return request('/gmail/connect', token)
 }
 
 export async function startGmailScan(token: string) {
-  const res = await fetch(`${API_URL}/gmail/scan`, {
-    method: 'POST',
-    headers: await getHeaders(token),
-  })
-  if (!res.ok) throw new Error('Failed to start scan')
-  return res.json()
+  return request('/gmail/scan', token, { method: 'POST' })
 }
 
 export async function disconnectGmail(token: string) {
