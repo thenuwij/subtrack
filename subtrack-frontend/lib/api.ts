@@ -14,7 +14,7 @@ export async function getSubscriptions(token: string) {
   const res = await fetch(`${API_URL}/subscriptions/`, {
     headers: await getHeaders(token),
   })
-  if (!res.ok) throw new Error('Failed to fetch subscriptions')
+  if (!res.ok) throw new Error('Failed to fetch recurring payments')
   return res.json()
 }
 
@@ -24,7 +24,7 @@ export async function createSubscription(token: string, data: SubscriptionInput)
     headers: await getHeaders(token),
     body: JSON.stringify(data),
   })
-  if (!res.ok) throw new Error('Failed to create subscription')
+  if (!res.ok) throw new Error('Failed to create recurring payment')
   return res.json()
 }
 
@@ -33,7 +33,7 @@ export async function deleteSubscription(token: string, id: string) {
     method: 'DELETE',
     headers: await getHeaders(token),
   })
-  if (!res.ok) throw new Error('Failed to delete subscription')
+  if (!res.ok) throw new Error('Failed to delete recurring payment')
   return res.json()
 }
 
@@ -41,7 +41,7 @@ export async function getSubscriptionChanges(token: string, days: number = 30) {
   const res = await fetch(`${API_URL}/subscriptions/changes?days=${days}`, {
     headers: await getHeaders(token),
   })
-  if (!res.ok) throw new Error('Failed to fetch subscription changes')
+  if (!res.ok) throw new Error('Failed to fetch payment changes')
   return res.json()
 }
 
@@ -88,7 +88,7 @@ export async function getDetected(
   const res = await fetch(`${API_URL}/detected/?status=${status}`, {
     headers: await getHeaders(token),
   })
-  if (!res.ok) throw new Error('Failed to fetch detected subscriptions')
+  if (!res.ok) throw new Error('Failed to fetch detected payments')
   return res.json()
 }
 
@@ -136,7 +136,7 @@ export async function getDuplicates(token: string) {
   const res = await fetch(`${API_URL}/subscriptions/duplicates`, {
     headers: await getHeaders(token),
   })
-  if (!res.ok) throw new Error('Failed to check for duplicates')
+  if (!res.ok) throw new Error('Failed to check for duplicate payments')
   return res.json()
 }
 
@@ -146,7 +146,7 @@ export async function mergeSubscription(token: string, id: string, into: string)
     headers: await getHeaders(token),
     body: JSON.stringify({ into }),
   })
-  if (!res.ok) throw new Error('Failed to merge')
+  if (!res.ok) throw new Error('Failed to merge payments')
   return res.json()
 }
 
@@ -188,7 +188,7 @@ export async function updateSubscription(token: string, id: string, data: Partia
     headers: await getHeaders(token),
     body: JSON.stringify(data),
   })
-  if (!res.ok) throw new Error('Failed to update subscription')
+  if (!res.ok) throw new Error('Failed to update recurring payment')
   return res.json()
 }
 

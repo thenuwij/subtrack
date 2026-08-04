@@ -12,6 +12,7 @@ import { Skeleton }               from '@/components/ui/skeleton'
 import { Plus, CreditCard }       from 'lucide-react'
 import { useCurrency }            from '@/lib/context/currency'
 import { formatCurrency }         from '@/lib/utils/currency'
+import { formatCategory }         from '@/lib/utils/categories'
 import { toast } from 'sonner'
 
 function monthlyEquivalent(sub: Subscription): number {
@@ -72,7 +73,7 @@ export default function SubscriptionsPage() {
       // Best effort — a duplicate check failing shouldn't break the page.
       getDuplicates(session.access_token).then(setDuplicates).catch(() => {})
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load subscriptions.')
+      setError(e instanceof Error ? e.message : 'Failed to load recurring payments.')
       toast.error('Something went wrong')
     } finally {
       setLoading(false)
@@ -104,7 +105,7 @@ export default function SubscriptionsPage() {
     if (!session) throw new Error('Not authenticated')
     const created = await createSubscription(session.access_token, formData)
     setSubscriptions(prev => [created, ...prev])
-    toast.success('Subscription added')
+    toast.success('Payment added')
   }
 
   // ── update ─────────────────────────────────────────────────────────────────
@@ -115,7 +116,7 @@ export default function SubscriptionsPage() {
     const updated = await updateSubscription(session.access_token, editingSubscription.id, formData)
     setSubscriptions(prev => prev.map(s => s.id === editingSubscription.id ? updated : s))
     setEditingSubscription(null)
-    toast.success('Subscription updated')
+    toast.success('Payment updated')
   }
 
   // ── delete ─────────────────────────────────────────────────────────────────
@@ -125,7 +126,7 @@ export default function SubscriptionsPage() {
     if (!session) throw new Error('Not authenticated')
     await deleteSubscription(session.access_token, id)
     setSubscriptions(prev => prev.filter(s => s.id !== id))
-    toast.success('Subscription deleted')
+    toast.success('Payment deleted')
   }
 
   // ── derived stats ──────────────────────────────────────────────────────────
@@ -208,7 +209,7 @@ export default function SubscriptionsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Subscriptions</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Recurring payments</h1>
           {!loading && subscriptions.length > 0 && (
             <p className="text-sm text-muted-foreground mt-0.5">
               {active.length} active · ~{formatCurrency(totalMonthly, baseCurrency)}/mo
@@ -217,7 +218,7 @@ export default function SubscriptionsPage() {
         </div>
         <Button onClick={() => setModalOpen(true)} size="sm">
           <Plus className="w-4 h-4 mr-1.5" />
-          Add
+          Add payment
         </Button>
       </div>
 
@@ -228,7 +229,7 @@ export default function SubscriptionsPage() {
           className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-4"
         >
           <p className="text-sm font-medium text-foreground">
-            Possible duplicate: {pair.keep.name} and {pair.merge.name}
+            Possible duplicate payment: {pair.keep.name} and {pair.merge.name}
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             {pair.reason} Both are counted in your total right now.
@@ -278,13 +279,13 @@ export default function SubscriptionsPage() {
           <div className="rounded-full bg-muted p-4 mb-4">
             <CreditCard className="w-6 h-6 text-muted-foreground" />
           </div>
-          <p className="font-medium text-sm">No subscriptions yet</p>
+          <p className="font-medium text-sm">No recurring payments yet</p>
           <p className="text-sm text-muted-foreground mt-1 mb-4">
-            Add your first subscription to start tracking.
+            Add rent, a utility bill, membership, subscription, or any payment that repeats.
           </p>
           <Button size="sm" onClick={() => setModalOpen(true)}>
             <Plus className="w-4 h-4 mr-1.5" />
-            Add subscription
+            Add payment
           </Button>
         </div>
       )}
@@ -309,6 +310,13 @@ export default function SubscriptionsPage() {
             totalLabel={totalLabel}
             searchQuery={search}
             onSearchChange={setSearch}
+            onClearFilters={() => {
+              setSearch('')
+              setSelectedCategory('')
+              setPeriod('all')
+              setFromDate('')
+              setToDate('')
+            }}
           />
 
           {/* Filtered empty state */}
@@ -321,9 +329,23 @@ export default function SubscriptionsPage() {
                 {search
                   ? 'No results for your search'
                   : selectedCategory
-                  ? `No ${selectedCategory} items`
+                  ? `No ${formatCategory(selectedCategory)} items`
                   : 'No items in this period'}
               </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-3"
+                onClick={() => {
+                  setSearch('')
+                  setSelectedCategory('')
+                  setPeriod('all')
+                  setFromDate('')
+                  setToDate('')
+                }}
+              >
+                Clear filters
+              </Button>
             </div>
           )}
 

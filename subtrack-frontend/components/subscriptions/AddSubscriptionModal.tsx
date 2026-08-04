@@ -11,6 +11,7 @@ import { useCurrency } from '@/lib/context/currency'
 import { getRates } from '@/lib/api'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/utils/currency'
+import { formatCategory } from '@/lib/utils/categories'
 
 const today = new Date().toISOString().split('T')[0]
 
@@ -181,13 +182,13 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           {/* Title changes based on mode */}
-          <DialogTitle>{isEditing ? 'Edit subscription' : 'Add subscription'}</DialogTitle>
+          <DialogTitle>{isEditing ? 'Edit recurring payment' : 'Add recurring payment'}</DialogTitle>
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
           <div className="grid gap-1.5">
             <Label htmlFor="sub-name">Name</Label>
-            <Input id="sub-name" placeholder="Netflix, GitHub Pro…" value={form.name} onChange={e => set('name', e.target.value)} disabled={loading} />
+            <Input id="sub-name" placeholder="Rent, Netflix, gym membership…" value={form.name} onChange={e => set('name', e.target.value)} disabled={loading} />
           </div>
 
           <div className="grid gap-1.5">
@@ -195,7 +196,7 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
             <Select value={form.category} onValueChange={v => set('category', v as Category)} disabled={loading}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {CATEGORIES.map(c => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}
+                {CATEGORIES.map(c => <SelectItem key={c} value={c}>{formatCategory(c)}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -306,7 +307,7 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={handleClose} disabled={loading}>Cancel</Button>
           <Button onClick={handleSubmit} disabled={loading || rateLoading}>
-            {loading ? (isEditing ? 'Saving…' : 'Adding…') : (isEditing ? 'Save changes' : 'Add subscription')}
+            {loading ? (isEditing ? 'Saving…' : 'Adding…') : (isEditing ? 'Save changes' : 'Add payment')}
           </Button>
         </DialogFooter>
       </DialogContent>

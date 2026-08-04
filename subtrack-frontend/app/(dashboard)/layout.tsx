@@ -8,7 +8,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <CurrencyProvider>
       <div className="flex min-h-screen">
         <Navbar />
-        <main className="flex-1 bg-background overflow-auto">
+        <main className="min-w-0 flex-1 overflow-auto bg-background pb-20 pt-14 md:pb-0 md:pt-0">
           {children}
         </main>
         <AgentChat />

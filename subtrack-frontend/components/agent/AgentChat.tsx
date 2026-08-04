@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { MessageCircle, X, Send } from 'lucide-react'
+import { MessageCircle, X, Send, Trash2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -79,6 +79,8 @@ export function AgentChat() {
       {/* Floating button */}
       <button
         onClick={() => setOpen(o => !o)}
+        aria-label={open ? 'Close financial assistant' : 'Open financial assistant'}
+        aria-expanded={open}
         className="fixed bottom-6 right-6 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90 transition-colors"
       >
         {open ? <X className="h-5 w-5" /> : <MessageCircle className="h-5 w-5" />}
@@ -86,19 +88,31 @@ export function AgentChat() {
 
       {/* Chat panel */}
       {open && (
-        <div className="fixed bottom-20 right-6 z-50 flex w-96 flex-col rounded-2xl border border-border bg-card shadow-xl sm:w-[440px]">
+        <div className="fixed bottom-20 left-4 right-4 z-50 flex flex-col rounded-2xl border border-border bg-card shadow-xl sm:left-auto sm:right-6 sm:w-[440px]">
           
           {/* Header */}
-          <div className="border-b border-border px-4 py-3">
-            <p className="text-sm font-semibold text-foreground">Financial assistant</p>
-            <p className="text-xs text-muted-foreground">Ask about your finances</p>
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Financial assistant</p>
+              <p className="text-xs text-muted-foreground">Ask about your finances</p>
+            </div>
+            {messages.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setMessages([])}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Clear
+              </button>
+            )}
           </div>
 
           {/* Messages */}
           <div className="flex flex-col gap-3 overflow-y-auto p-4 h-[420px]">
             {messages.length === 0 && (
               <p className="text-xs text-muted-foreground text-center mt-8">
-                Ask me anything about your subscriptions and what they cost you.
+                Ask me about your recurring payments, monthly commitments, or savings goals.
               </p>
             )}
             {messages.map((msg, i) => (
@@ -130,6 +144,7 @@ export function AgentChat() {
             <input
               className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
               placeholder="Ask something..."
+              aria-label="Message financial assistant"
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && send()}
@@ -139,6 +154,7 @@ export function AgentChat() {
               onClick={send}
               disabled={loading || !input.trim()}
               className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground disabled:opacity-50"
+              aria-label="Send message"
             >
               <Send className="h-4 w-4" />
             </button>

@@ -10,7 +10,7 @@ from app.models import Subscription, SavingsGoal, UserPreference
 TOOL_DEFINITIONS = [
     {
         "name": "get_subscriptions",
-        "description": "Get all active subscriptions for the user. Use when asked about recurring bills, subscriptions, or monthly commitments.",
+        "description": "Get all active recurring payments for the user, including rent, bills, memberships, and subscriptions. Use when asked about recurring bills or monthly commitments.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -37,13 +37,13 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "delete_subscription",
-        "description": "Delete a subscription by ID. Only call this after confirming with the user which subscription to delete.",
+        "description": "Delete a recurring payment by ID. Only call this after confirming with the user which payment to delete.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "subscription_id": {
                     "type": "string",
-                    "description": "The UUID of the subscription to delete"
+                    "description": "The UUID of the recurring payment to delete"
                 }
             },
             "required": ["subscription_id"]
@@ -153,7 +153,7 @@ def delete_subscription(db: Session, user_id: str, subscription_id: str):
         Subscription.user_id == user_id
     ).first()
     if not sub:
-        return {"success": False, "error": "Subscription not found"}
+        return {"success": False, "error": "Recurring payment not found"}
     db.delete(sub)
     db.commit()
     return {"success": True, "deleted": sub.name}
