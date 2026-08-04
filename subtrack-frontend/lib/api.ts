@@ -1,4 +1,4 @@
-import type { SavingsGoalInput, SubscriptionInput } from '@/types'
+import type { SubscriptionInput } from '@/types'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -222,43 +222,5 @@ export async function updateSubscription(token: string, id: string, data: Partia
     body: JSON.stringify(data),
   })
   if (!res.ok) throw new Error('Failed to update recurring payment')
-  return res.json()
-}
-
-// Savings Goals
-export async function getSavingsGoals(token: string) {
-  const res = await fetch(`${API_URL}/savings/`, {
-    headers: await getHeaders(token),
-  })
-  if (!res.ok) throw new Error('Failed to fetch savings goals')
-  return res.json()
-}
-
-export async function createSavingsGoal(token: string, data: SavingsGoalInput) {
-  const res = await fetch(`${API_URL}/savings/`, {
-    method: 'POST',
-    headers: await getHeaders(token),
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error('Failed to create savings goal')
-  return res.json()
-}
-
-export async function updateSavingsGoal(token: string, id: string, data: Partial<SavingsGoalInput>) {
-  const res = await fetch(`${API_URL}/savings/${id}`, {
-    method: 'PATCH',
-    headers: await getHeaders(token),
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error('Failed to update savings goal')
-  return res.json()
-}
-
-export async function deleteSavingsGoal(token: string, id: string) {
-  const res = await fetch(`${API_URL}/savings/${id}`, {
-    method: 'DELETE',
-    headers: await getHeaders(token),
-  })
-  if (!res.ok) throw new Error('Failed to delete savings goal')
   return res.json()
 }

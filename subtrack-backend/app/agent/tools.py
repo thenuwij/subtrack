@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from datetime import datetime
-from app.models import Subscription, SavingsGoal, UserPreference
+from app.models import Subscription, UserPreference
 
 # ── Tool definitions (what Claude sees) ──────────────────────────────────────
 # This is the list you pass to the Claude API so it knows what tools exist.
@@ -11,15 +11,6 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_subscriptions",
         "description": "Get all active recurring payments for the user, including rent, bills, memberships, and subscriptions. Use when asked about recurring bills or monthly commitments.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    },
-    {
-        "name": "get_savings_goals",
-        "description": "Get all savings goals and their current progress.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -47,33 +38,6 @@ TOOL_DEFINITIONS = [
                 }
             },
             "required": ["subscription_id"]
-        }
-    },
-    {
-        "name": "delete_savings_goal",
-        "description": "Delete a savings goal by ID. Only call this after confirming with the user.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "goal_id": {
-                    "type": "string",
-                    "description": "The UUID of the savings goal to delete"
-                }
-            },
-            "required": ["goal_id"]
-        }
-    },
-    {
-        "name": "create_savings_goal",
-        "description": "Create a new savings goal for the user.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name":          { "type": "string", "description": "Goal name e.g. 'Dyson Vacuum'" },
-                "target_amount": { "type": "number", "description": "Target amount to save" },
-                "currency":      { "type": "string", "description": "Currency code" }
-            },
-            "required": ["name", "target_amount", "currency"]
         }
     },
 ]
@@ -105,45 +69,11 @@ def get_subscriptions(db: Session, user_id: str):
     ]
 
 
-def get_savings_goals(db: Session, user_id: str):
-    goals = db.query(SavingsGoal).filter(
-        SavingsGoal.user_id == user_id,
-        SavingsGoal.completed_at == None
-    ).all()
-    return [
-        {
-            "id": str(g.id),
-            "name": g.name,
-            "target_amount": g.target_amount,
-            "current_amount": g.current_amount,
-            "currency": g.currency,
-            "target_date": g.target_date.strftime("%Y-%m-%d") if g.target_date else None
-        }
-        for g in goals
-    ]
-
-
 def get_monthly_income(db: Session, user_id: str):
     pref = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
     if not pref or pref.monthly_income is None:
         return {"monthly_income": None, "currency": pref.base_currency if pref else "AUD"}
     return {"monthly_income": pref.monthly_income, "currency": pref.base_currency}
-
-
-def create_savings_goal(db: Session, user_id: str, name: str,
-                        target_amount: float, currency: str):
-    goal = SavingsGoal(
-        user_id=user_id,
-        name=name,
-        target_amount=target_amount,
-        current_amount=0.0,
-        currency=currency,
-        created_by="agent"   # marks it was created by the agent, not manually
-    )
-    db.add(goal)
-    db.commit()
-    db.refresh(goal)
-    return {"success": True, "name": goal.name, "target_amount": goal.target_amount}
 
 
 def delete_subscription(db: Session, user_id: str, subscription_id: str):
@@ -159,19 +89,6 @@ def delete_subscription(db: Session, user_id: str, subscription_id: str):
     return {"success": True, "deleted": sub.name}
 
 
-def delete_savings_goal(db: Session, user_id: str, goal_id: str):
-    from uuid import UUID
-    goal = db.query(SavingsGoal).filter(
-        SavingsGoal.id == UUID(goal_id),
-        SavingsGoal.user_id == user_id
-    ).first()
-    if not goal:
-        return {"success": False, "error": "Goal not found"}
-    db.delete(goal)
-    db.commit()
-    return {"success": True, "deleted": goal.name}
-
-
 # ── Dispatcher ────────────────────────────────────────────────────────────────
 # When Claude says "call get_subscriptions with these args",
 # this function maps the tool name to the right Python function.
@@ -180,15 +97,9 @@ def delete_savings_goal(db: Session, user_id: str, goal_id: str):
 def run_tool(tool_name: str, tool_input: dict, db: Session, user_id: str):
     if tool_name == "get_subscriptions":
         return get_subscriptions(db, user_id)
-    elif tool_name == "get_savings_goals":
-        return get_savings_goals(db, user_id)
     elif tool_name == "get_monthly_income":
         return get_monthly_income(db, user_id)
-    elif tool_name == "create_savings_goal":
-        return create_savings_goal(db, user_id, **tool_input)
     elif tool_name == "delete_subscription":
         return delete_subscription(db, user_id, **tool_input)
-    elif tool_name == "delete_savings_goal":
-        return delete_savings_goal(db, user_id, **tool_input)
     else:
         return {"error": f"Unknown tool: {tool_name}"}

@@ -46,15 +46,6 @@ export interface SubscriptionInput {
   share_amount?: number
 }
 
-export interface SavingsGoalInput {
-  name: string
-  target_amount: number
-  currency?: string
-  current_amount?: number
-  target_date?: string | null
-  completed_at?: string | null
-}
-
 export interface GmailStatus {
   connected: boolean
   email_address?: string
@@ -124,18 +115,6 @@ export interface Preferences {
   monthly_income: number | null  // null until the user states it
 }
 
-export interface SavingsGoal {
-  id: string
-  user_id: string
-  name: string
-  target_amount: number
-  current_amount: number
-  currency: string
-  target_date: string | null
-  created_by: string
-  created_at: string
-  completed_at: string | null
-}
 export interface DuplicateBrief {
   id: string
   name: string
