@@ -88,8 +88,12 @@ export default function AccountPage() {
         const { auth_url } = await getGmailConnectUrl(token)
         window.location.href = auth_url
       })
-    } catch {
-      toast.error('Could not start the Gmail connection. Please try again.')
+    } catch (e) {
+      // Show what actually went wrong — unreachable backend, misconfiguration,
+      // or a server error all used to read "please try again".
+      const message = e instanceof Error ? e.message : 'Could not start the Gmail connection.'
+      setGmailError(message)
+      toast.error(message)
     }
   }
 
@@ -100,8 +104,10 @@ export default function AccountPage() {
         setGmail(g => (g ? { ...g, scan_status: 'running' } : g))
         router.push('/review')
       })
-    } catch {
-      toast.error('Could not start the inbox scan. Please try again.')
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Could not start the inbox scan.'
+      setGmailError(message)
+      toast.error(message)
     }
   }
 
