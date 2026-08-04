@@ -1,121 +1,548 @@
 import json
+import logging
+import re
+from datetime import datetime, timedelta, timezone
+from typing import Generator, Optional
+from uuid import UUID, uuid4
+
 import anthropic
-from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from typing import Optional
-from app.database import get_db
-from app.middleware.auth import verify_token
+
 from app.agent.tools import TOOL_DEFINITIONS, run_tool
 from app.config import settings
+from app.database import get_db
+from app.middleware.auth import verify_token
+from app.models import AgentMessage, AgentThread
+
 
 router = APIRouter(prefix="/agent", tags=["agent"])
-
-# This is the Anthropic client — it reads ANTHROPIC_API_KEY from env automatically
 client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+logger = logging.getLogger(__name__)
+
+MAX_AGENT_STEPS = 8
+MAX_CONTEXT_MESSAGES = 60
+STALE_STREAM_AFTER = timedelta(minutes=5)
+DEFAULT_THREAD_TITLE = "New conversation"
 
 
-
-class ChatMessage(BaseModel):
-    role: str      # "user" or "assistant"
-    content: str
+class ThreadCreate(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=120)
 
 
-class ChatRequest(BaseModel):
-    message: str
-    history: list[ChatMessage] = []
+class ThreadUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    archived: Optional[bool] = None
 
 
-@router.post("/chat")
-def chat(
-    data: ChatRequest,
-    user_id: str = Depends(verify_token),
-    db: Session = Depends(get_db)
-):
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    current_month = datetime.utcnow().strftime("%Y-%m")
+class MessageCreate(BaseModel):
+    message: str = Field(min_length=1, max_length=8_000)
+    client_message_id: str = Field(min_length=8, max_length=64)
 
-    system_prompt = f"""You are Subtrack's financial assistant. Today's date is {today}. The current month is {current_month}.
 
-You have access to the user's real financial data through tools.
+def _utcnow() -> datetime:
+    # Existing columns store naive UTC timestamps. Centralising this keeps the
+    # convention explicit until the schema moves to timezone-aware columns.
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _iso(value: Optional[datetime]) -> Optional[str]:
+    return f"{value.isoformat()}Z" if value else None
+
+
+def _normalise_title(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()[:120]
+
+
+def _title_from_message(message: str) -> str:
+    compact = _normalise_title(message)
+    if len(compact) <= 48:
+        return compact or DEFAULT_THREAD_TITLE
+    return f"{compact[:47].rstrip()}…"
+
+
+def _serialize_thread(thread: AgentThread, message_count: int = 0) -> dict:
+    return {
+        "id": str(thread.id),
+        "title": thread.title,
+        "archived": thread.archived,
+        "message_count": message_count,
+        "created_at": _iso(thread.created_at),
+        "updated_at": _iso(thread.updated_at),
+    }
+
+
+def _serialize_message(message: AgentMessage) -> dict:
+    return {
+        "id": str(message.id),
+        "thread_id": str(message.thread_id),
+        "role": message.role,
+        "sequence": message.sequence,
+        "content": message.content,
+        "status": message.status,
+        "reply_to_id": str(message.reply_to_id) if message.reply_to_id else None,
+        "error_code": message.error_code,
+        "created_at": _iso(message.created_at),
+        "updated_at": _iso(message.updated_at),
+    }
+
+
+def _get_thread(
+    db: Session,
+    thread_id: UUID,
+    user_id: str,
+    *,
+    for_update: bool = False,
+) -> AgentThread:
+    query = db.query(AgentThread).filter(
+        AgentThread.id == thread_id,
+        AgentThread.user_id == user_id,
+    )
+    if for_update:
+        query = query.with_for_update()
+    thread = query.first()
+    if not thread:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return thread
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
+
+
+def _error_code(exc: Exception) -> str:
+    if isinstance(exc, anthropic.RateLimitError):
+        return "rate_limited"
+    if isinstance(exc, anthropic.APITimeoutError):
+        return "timed_out"
+    if isinstance(exc, anthropic.APIConnectionError):
+        return "provider_unavailable"
+    if isinstance(exc, anthropic.APIStatusError):
+        return "provider_error"
+    return "agent_error"
+
+
+def _public_error(code: str) -> str:
+    return {
+        "rate_limited": "The assistant is busy right now. Please retry in a moment.",
+        "timed_out": "The response took too long. Your message was saved and can be retried.",
+        "provider_unavailable": "The assistant could not be reached. Your message was saved.",
+        "provider_error": "The assistant service returned an error. Please retry.",
+        "stream_interrupted": "The response was interrupted. Please retry it.",
+    }.get(code, "Something went wrong. Your message was saved and can be retried.")
+
+
+def _model_history(db: Session, thread_id: UUID) -> list[dict]:
+    rows = (
+        db.query(AgentMessage)
+        .filter(
+            AgentMessage.thread_id == thread_id,
+            AgentMessage.status == "completed",
+        )
+        .order_by(AgentMessage.sequence.desc())
+        .limit(MAX_CONTEXT_MESSAGES)
+        .all()
+    )
+    rows.reverse()
+
+    # A failed answer can leave two consecutive user turns. Coalescing adjacent
+    # roles produces a valid, compact model transcript without losing text.
+    messages: list[dict] = []
+    for row in rows:
+        if row.role not in {"user", "assistant"} or not row.content.strip():
+            continue
+        if messages and messages[-1]["role"] == row.role:
+            messages[-1]["content"] += f"\n\n{row.content}"
+        else:
+            messages.append({"role": row.role, "content": row.content})
+    while messages and messages[0]["role"] == "assistant":
+        messages.pop(0)
+    return messages
+
+
+def _system_prompt() -> str:
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    current_month = now.strftime("%Y-%m")
+    return f"""You are Subtrack's financial assistant. Today's UTC date is {today}. The current month is {current_month}.
+
+You have read-only access to the user's real recurring-payment data through tools.
 
 Rules:
-- Always use tools to get real data before answering financial questions. Never guess amounts.
-- When the user asks about "this month", always use {current_month} as the month parameter.
-- Be concise. One or two sentences is usually enough.
-- If asked to create something, do it and confirm it was done.
-- Always refer to amounts in the user's base currency unless they specify otherwise.
-- In user-facing replies, call tracked items "recurring payments" or "payments". Use
-  "subscription" only when the user is specifically talking about a subscription service.
-- Never make up financial data. If you don't have it, say so.
-- Subtrack is not licensed to give financial product advice. Never recommend or comment on
-  the merits of investments, shares, ETFs, crypto, super funds, insurance, or specific bank
-  products, even if asked directly. Say it's outside what Subtrack does and move on.
-- You can always talk about the user's own cashflow: what they're committed to, what share of
-  their income it takes, what changed since last month, and whether a given cost looks high
-  relative to their own history. That is the job.
+- Always use tools before stating facts or amounts about the user's finances.
+- When the user asks about "this month", use {current_month}.
+- Be concise, direct and helpful. Never invent financial data.
+- Use the user's base currency unless they specify otherwise.
+- Call tracked items "recurring payments" or "payments" unless discussing a subscription service specifically.
+- Phase 1 is read-only. You cannot add, edit, merge or remove financial records yet. Explain that clearly if asked; never claim an action was completed.
+- Subtrack does not provide financial-product advice. Do not recommend investments, shares, ETFs, crypto, super funds, insurance, or specific bank products.
+- You may analyse the user's own recurring commitments, income share and recorded changes. Do not label a cost unnecessary as fact; describe it as a possible saving candidate and explain the evidence.
 
-Personality: Direct, helpful, occasionally dry. Not overly enthusiastic."""
+Personality: Direct, calm, helpful, occasionally dry. Not overly enthusiastic."""
 
-    # Build the messages list from history + new message
-    # Claude needs the full conversation history each time —
-    # it has no memory between requests, so we pass it all in
-    messages = [
-        {"role": m.role, "content": m.content}
-        for m in data.history
-    ]
-    messages.append({"role": "user", "content": data.message})
 
-    # ── Agent loop ────────────────────────────────────────────────────────
-    # We loop until Claude gives a final text response.
-    # Max 10 iterations — safety net to prevent infinite loops.
+def _mark_failed(db: Session, message_id: UUID, code: str) -> None:
+    db.rollback()
+    message = db.query(AgentMessage).filter(AgentMessage.id == message_id).first()
+    if message:
+        message.status = "failed"
+        message.error_code = code
+        message.updated_at = _utcnow()
+        db.commit()
 
-    for _ in range(10):
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            system=system_prompt,
-            tools=TOOL_DEFINITIONS,
-            messages=messages
-        )
 
-        # stop_reason tells us why Claude stopped:
-        # "end_turn"   → Claude is done, has a final answer
-        # "tool_use"   → Claude wants to call one or more tools
+def _stream_reply(
+    db: Session,
+    thread_id: UUID,
+    assistant_message_id: UUID,
+    user_id: str,
+) -> Generator[str, None, None]:
+    accumulated_text: list[str] = []
+    try:
+        yield _sse("status", {"state": "thinking"})
+        messages = _model_history(db, thread_id)
 
-        if response.stop_reason == "end_turn":
-            # Extract the text from the response content blocks
-            final_text = next(
-                (block.text for block in response.content if hasattr(block, "text")),
-                "I couldn't generate a response."
-            )
-            return {"reply": final_text}
+        for _ in range(MAX_AGENT_STEPS):
+            with client.messages.stream(
+                model="claude-sonnet-4-6",
+                max_tokens=1_500,
+                system=_system_prompt(),
+                tools=TOOL_DEFINITIONS,
+                messages=messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    accumulated_text.append(text)
+                    yield _sse("delta", {"text": text})
+                response = stream.get_final_message()
 
-        if response.stop_reason == "tool_use":
-            # Add Claude's response to the messages list
-            # (including its tool_use blocks — Claude needs to see its own requests)
+            if response.stop_reason == "end_turn":
+                final_text = "".join(accumulated_text).strip()
+                if not final_text:
+                    final_text = "I couldn't generate a response."
+                    yield _sse("delta", {"text": final_text})
+
+                assistant = db.query(AgentMessage).filter(
+                    AgentMessage.id == assistant_message_id,
+                    AgentMessage.thread_id == thread_id,
+                ).first()
+                thread = db.query(AgentThread).filter(AgentThread.id == thread_id).first()
+                if not assistant or not thread:
+                    raise RuntimeError("Conversation disappeared while generating a reply")
+
+                assistant.content = final_text
+                assistant.status = "completed"
+                assistant.error_code = None
+                assistant.updated_at = _utcnow()
+                thread.updated_at = _utcnow()
+                db.commit()
+                db.refresh(assistant)
+                db.refresh(thread)
+                yield _sse(
+                    "done",
+                    {
+                        "message": _serialize_message(assistant),
+                        "thread": _serialize_thread(thread),
+                    },
+                )
+                return
+
+            if response.stop_reason != "tool_use":
+                raise RuntimeError(f"Unsupported model stop reason: {response.stop_reason}")
+
             messages.append({"role": "assistant", "content": response.content})
-
-            # Process every tool Claude requested
-            # Claude can request multiple tools in one turn
             tool_results = []
             for block in response.content:
-                if block.type == "tool_use":
-                    # Run the actual Python function
+                if block.type != "tool_use":
+                    continue
+                yield _sse("status", {"state": "using_tool", "tool": block.name})
+                try:
                     result = run_tool(block.name, block.input, db, user_id)
-
-                    # Package the result in the format Claude expects
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,   # must match the request id
-                        "content": json.dumps(result)
-                    })
-
-            # Send all tool results back to Claude in one message
+                    content = json.dumps(result)
+                    is_error = False
+                except Exception:
+                    db.rollback()
+                    logger.exception("Agent tool %s failed", block.name)
+                    content = json.dumps({"error": "The tool could not complete."})
+                    is_error = True
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": content,
+                    "is_error": is_error,
+                })
             messages.append({"role": "user", "content": tool_results})
 
-            # Loop continues — Claude will now reason over the results
+        raise RuntimeError("Agent exceeded its maximum number of steps")
+    except GeneratorExit:
+        _mark_failed(db, assistant_message_id, "stream_interrupted")
+        raise
+    except Exception as exc:
+        code = _error_code(exc)
+        logger.exception("Agent response failed for thread %s", thread_id)
+        try:
+            _mark_failed(db, assistant_message_id, code)
+        except Exception:
+            logger.exception(
+                "Could not persist agent failure for message %s",
+                assistant_message_id,
+            )
+        yield _sse(
+            "error",
+            {
+                "message_id": str(assistant_message_id),
+                "code": code,
+                "message": _public_error(code),
+            },
+        )
 
-    # If we hit 10 iterations without a final answer, something went wrong
-    raise HTTPException(status_code=500, detail="Agent did not complete in time.")
+
+def _streaming_response(generator: Generator[str, None, None]) -> StreamingResponse:
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/threads")
+def list_threads(
+    archived: bool = False,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    counts = dict(
+        db.query(AgentMessage.thread_id, func.count(AgentMessage.id))
+        .filter(
+            AgentMessage.user_id == user_id,
+            AgentMessage.status != "superseded",
+        )
+        .group_by(AgentMessage.thread_id)
+        .all()
+    )
+    threads = (
+        db.query(AgentThread)
+        .filter(
+            AgentThread.user_id == user_id,
+            AgentThread.archived == archived,
+        )
+        .order_by(AgentThread.updated_at.desc())
+        .limit(100)
+        .all()
+    )
+    return [_serialize_thread(thread, counts.get(thread.id, 0)) for thread in threads]
+
+
+@router.post("/threads", status_code=status.HTTP_201_CREATED)
+def create_thread(
+    data: ThreadCreate,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    title = _normalise_title(data.title or "") or DEFAULT_THREAD_TITLE
+    thread = AgentThread(user_id=user_id, title=title)
+    db.add(thread)
+    db.commit()
+    db.refresh(thread)
+    return _serialize_thread(thread)
+
+
+@router.patch("/threads/{thread_id}")
+def update_thread(
+    thread_id: UUID,
+    data: ThreadUpdate,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    thread = _get_thread(db, thread_id, user_id)
+    fields = data.model_dump(exclude_unset=True)
+    if "title" in fields:
+        if fields["title"] is None:
+            raise HTTPException(status_code=422, detail="Title cannot be null")
+        fields["title"] = _normalise_title(fields["title"])
+        if not fields["title"]:
+            raise HTTPException(status_code=422, detail="Title cannot be empty")
+    if "archived" in fields and fields["archived"] is None:
+        raise HTTPException(status_code=422, detail="Archived state cannot be null")
+    for key, value in fields.items():
+        setattr(thread, key, value)
+    thread.updated_at = _utcnow()
+    db.commit()
+    db.refresh(thread)
+    return _serialize_thread(thread)
+
+
+@router.delete("/threads/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_thread(
+    thread_id: UUID,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    thread = _get_thread(db, thread_id, user_id)
+    db.query(AgentMessage).filter(
+        AgentMessage.thread_id == thread.id,
+        AgentMessage.user_id == user_id,
+    ).delete(synchronize_session=False)
+    db.delete(thread)
+    db.commit()
+
+
+@router.get("/threads/{thread_id}/messages")
+def list_messages(
+    thread_id: UUID,
+    before: Optional[int] = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    _get_thread(db, thread_id, user_id)
+    # A hard process stop cannot run the stream generator's cleanup. Repair a
+    # stale placeholder on the next read so the UI offers Retry instead of
+    # displaying an endless spinner.
+    stale_before = _utcnow() - STALE_STREAM_AFTER
+    stale = db.query(AgentMessage).filter(
+        AgentMessage.thread_id == thread_id,
+        AgentMessage.user_id == user_id,
+        AgentMessage.status == "streaming",
+        AgentMessage.updated_at < stale_before,
+    ).update(
+        {"status": "failed", "error_code": "stream_interrupted"},
+        synchronize_session=False,
+    )
+    if stale:
+        db.commit()
+    query = db.query(AgentMessage).filter(
+        AgentMessage.thread_id == thread_id,
+        AgentMessage.user_id == user_id,
+        AgentMessage.status != "superseded",
+    )
+    if before:
+        query = query.filter(AgentMessage.sequence < before)
+    rows = query.order_by(AgentMessage.sequence.desc()).limit(limit + 1).all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    rows.reverse()
+    return {
+        "messages": [_serialize_message(row) for row in rows],
+        "has_more": has_more,
+        "next_before": rows[0].sequence if has_more and rows else None,
+    }
+
+
+@router.post("/threads/{thread_id}/messages")
+def create_message(
+    thread_id: UUID,
+    data: MessageCreate,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    thread = _get_thread(db, thread_id, user_id, for_update=True)
+    if thread.archived:
+        raise HTTPException(status_code=409, detail="Restore this conversation before replying")
+    text = data.message.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Message cannot be empty")
+
+    existing = db.query(AgentMessage).filter(
+        AgentMessage.thread_id == thread.id,
+        AgentMessage.user_id == user_id,
+        AgentMessage.client_message_id == data.client_message_id,
+    ).first()
+    if existing:
+        reply = db.query(AgentMessage).filter(
+            AgentMessage.reply_to_id == existing.id,
+            AgentMessage.status != "superseded",
+        ).order_by(AgentMessage.sequence.desc()).first()
+        if reply and reply.status == "completed":
+            def replay() -> Generator[str, None, None]:
+                yield _sse("delta", {"text": reply.content})
+                yield _sse("done", {
+                    "message": _serialize_message(reply),
+                    "thread": _serialize_thread(thread),
+                    "replayed": True,
+                })
+            return _streaming_response(replay())
+        raise HTTPException(
+            status_code=409,
+            detail="This message was already received. Retry its failed response instead.",
+        )
+
+    user_message = AgentMessage(
+        id=uuid4(),
+        thread_id=thread.id,
+        user_id=user_id,
+        role="user",
+        sequence=thread.next_message_sequence + 1,
+        content=text,
+        status="completed",
+        client_message_id=data.client_message_id,
+    )
+    assistant_message = AgentMessage(
+        id=uuid4(),
+        thread_id=thread.id,
+        user_id=user_id,
+        role="assistant",
+        sequence=thread.next_message_sequence + 2,
+        content="",
+        status="streaming",
+        reply_to_id=user_message.id,
+    )
+    db.add_all([user_message, assistant_message])
+    thread.next_message_sequence += 2
+    if thread.title == DEFAULT_THREAD_TITLE:
+        thread.title = _title_from_message(text)
+    thread.updated_at = _utcnow()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="This message was already received")
+    db.refresh(assistant_message)
+    return _streaming_response(
+        _stream_reply(db, thread.id, assistant_message.id, user_id)
+    )
+
+
+@router.post("/threads/{thread_id}/messages/{message_id}/retry")
+def retry_message(
+    thread_id: UUID,
+    message_id: UUID,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    thread = _get_thread(db, thread_id, user_id, for_update=True)
+    if thread.archived:
+        raise HTTPException(status_code=409, detail="Restore this conversation before retrying")
+    failed = db.query(AgentMessage).filter(
+        AgentMessage.id == message_id,
+        AgentMessage.thread_id == thread.id,
+        AgentMessage.user_id == user_id,
+        AgentMessage.role == "assistant",
+        AgentMessage.status == "failed",
+    ).first()
+    if not failed or not failed.reply_to_id:
+        raise HTTPException(status_code=409, detail="Only failed responses can be retried")
+
+    failed.status = "superseded"
+    retry = AgentMessage(
+        id=uuid4(),
+        thread_id=thread.id,
+        user_id=user_id,
+        role="assistant",
+        sequence=thread.next_message_sequence + 1,
+        content="",
+        status="streaming",
+        reply_to_id=failed.reply_to_id,
+    )
+    thread.next_message_sequence += 1
+    thread.updated_at = _utcnow()
+    db.add(retry)
+    db.commit()
+    db.refresh(retry)
+    return _streaming_response(_stream_reply(db, thread.id, retry.id, user_id))

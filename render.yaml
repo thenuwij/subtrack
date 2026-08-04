@@ -16,7 +16,9 @@ services:
     plan: free
     rootDir: subtrack-backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Migrations are idempotent and run before every boot, so a newly deployed
+    # API never serves code against an older schema.
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     # `/` returns the health payload, so Render can tell a live deploy from a
     # crashed one. Without this a boot failure looks like a slow start.
     healthCheckPath: /

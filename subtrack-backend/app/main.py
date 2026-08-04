@@ -51,7 +51,7 @@ def on_startup():
     # a spinner up until the staleness window expires. Partial results are
     # already committed batch-by-batch, so nothing found is lost.
     from app.database import SessionLocal
-    from app.models import GmailAccount
+    from app.models import AgentMessage, GmailAccount
     from app.routers.gmail import INTERRUPTED_MESSAGE
     db = SessionLocal()
     try:
@@ -63,6 +63,21 @@ def on_startup():
         if interrupted:
             db.commit()
             logger.warning("Marked %d interrupted scan(s) as failed at startup", interrupted)
+
+        interrupted_replies = (
+            db.query(AgentMessage)
+            .filter(AgentMessage.status == "streaming")
+            .update({
+                "status": "failed",
+                "error_code": "stream_interrupted",
+            })
+        )
+        if interrupted_replies:
+            db.commit()
+            logger.warning(
+                "Marked %d interrupted agent response(s) as failed at startup",
+                interrupted_replies,
+            )
     finally:
         db.close()
 

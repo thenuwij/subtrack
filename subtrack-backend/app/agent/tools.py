@@ -1,5 +1,4 @@
 from sqlalchemy.orm import Session
-from datetime import datetime
 from app.models import Subscription, UserPreference
 
 # ── Tool definitions (what Claude sees) ──────────────────────────────────────
@@ -24,20 +23,6 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {},
             "required": []
-        }
-    },
-    {
-        "name": "delete_subscription",
-        "description": "Delete a recurring payment by ID. Only call this after confirming with the user which payment to delete.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "subscription_id": {
-                    "type": "string",
-                    "description": "The UUID of the recurring payment to delete"
-                }
-            },
-            "required": ["subscription_id"]
         }
     },
 ]
@@ -76,19 +61,6 @@ def get_monthly_income(db: Session, user_id: str):
     return {"monthly_income": pref.monthly_income, "currency": pref.base_currency}
 
 
-def delete_subscription(db: Session, user_id: str, subscription_id: str):
-    from uuid import UUID
-    sub = db.query(Subscription).filter(
-        Subscription.id == UUID(subscription_id),
-        Subscription.user_id == user_id
-    ).first()
-    if not sub:
-        return {"success": False, "error": "Recurring payment not found"}
-    db.delete(sub)
-    db.commit()
-    return {"success": True, "deleted": sub.name}
-
-
 # ── Dispatcher ────────────────────────────────────────────────────────────────
 # When Claude says "call get_subscriptions with these args",
 # this function maps the tool name to the right Python function.
@@ -99,7 +71,4 @@ def run_tool(tool_name: str, tool_input: dict, db: Session, user_id: str):
         return get_subscriptions(db, user_id)
     elif tool_name == "get_monthly_income":
         return get_monthly_income(db, user_id)
-    elif tool_name == "delete_subscription":
-        return delete_subscription(db, user_id, **tool_input)
-    else:
-        return {"error": f"Unknown tool: {tool_name}"}
+    return {"error": f"Unknown tool: {tool_name}"}

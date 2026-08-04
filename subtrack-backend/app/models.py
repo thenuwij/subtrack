@@ -1,4 +1,16 @@
-from sqlalchemy import Column, String, Float, DateTime, Boolean, Enum, Integer, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from app.database import Base
@@ -142,3 +154,78 @@ class UserPreference(Base):
     base_currency = Column(String, default="AUD")
     monthly_income = Column(Float, nullable=True)     # in base currency; drives share-of-income
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class AgentThread(Base):
+    """A durable conversation owned by exactly one Subtrack user."""
+
+    __tablename__ = "agent_threads"
+    __table_args__ = (
+        Index("ix_agent_threads_user_updated", "user_id", "updated_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, nullable=False, index=True)
+    title = Column(String(120), nullable=False, default="New conversation")
+    archived = Column(Boolean, nullable=False, default=False, index=True)
+    next_message_sequence = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class AgentMessage(Base):
+    """A persisted user or assistant message, including interrupted replies.
+
+    Assistant placeholders are written before the model is called. That means a
+    browser refresh or a backend failure never loses the user's message, and a
+    failed response can be retried without duplicating their question.
+    """
+
+    __tablename__ = "agent_messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "thread_id",
+            "client_message_id",
+            name="uq_agent_messages_thread_client_id",
+        ),
+        UniqueConstraint(
+            "thread_id",
+            "sequence",
+            name="uq_agent_messages_thread_sequence",
+        ),
+        Index("ix_agent_messages_thread_sequence", "thread_id", "sequence"),
+        Index("ix_agent_messages_user_thread", "user_id", "thread_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    thread_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(String, nullable=False, index=True)
+    role = Column(String(16), nullable=False)          # user | assistant
+    sequence = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False, default="")
+    status = Column(String(16), nullable=False, default="completed")
+    reply_to_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("agent_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Generated in the browser. Only user messages set it; the unique
+    # constraint makes a double click or network retry safe.
+    client_message_id = Column(String(64), nullable=True)
+    error_code = Column(String(64), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

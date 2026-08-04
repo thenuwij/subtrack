@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, CreditCard, LogOut, UserCircle, MailCheck } from 'lucide-react'
+import { LayoutDashboard, CreditCard, LogOut, UserCircle, MailCheck, Sparkles } from 'lucide-react'
 import { getDetected, getGmailStatus } from '@/lib/api'
 import { Logo, LogoMark } from '@/components/layout/Logo'
 
@@ -11,6 +11,7 @@ const links = [
   { href: '/dashboard',     label: 'Dashboard',     icon: LayoutDashboard },
   { href: '/subscriptions', label: 'Payments',      icon: CreditCard },
   { href: '/review',        label: 'Inbox',         icon: MailCheck },
+  { href: '/assistant',     label: 'Assistant',     icon: Sparkles },
   { href: '/account',       label: 'Account',       icon: UserCircle },
 ]
 
