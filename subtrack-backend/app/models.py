@@ -90,9 +90,11 @@ class GmailAccount(Base):
     last_scanned_at = Column(DateTime, nullable=True)
     scan_status = Column(String, default="idle")      # idle | running | done | error
     scan_error = Column(String, nullable=True)
-    # When the current scan began. A process that dies mid-scan leaves
-    # scan_status stuck on "running", which would block every future scan
-    # forever; this is what lets a stale run be recognised and superseded.
+    # Heartbeat of the current scan: set when it starts and refreshed as it
+    # progresses (each fetch batch, each analysis batch). A process that dies
+    # mid-scan leaves scan_status stuck on "running", which would block every
+    # future scan forever; a heartbeat older than the staleness window is what
+    # lets a dead run be recognised, surfaced as an error, and superseded.
     scan_started_at = Column(DateTime, nullable=True)
 
 

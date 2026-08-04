@@ -71,6 +71,23 @@ export default function AccountPage() {
     }
   }, [])
 
+  // While a scan runs, poll for the outcome. Without this the "Scanning"
+  // button stays disabled forever — even after the scan ends — until the
+  // user happens to refresh the page.
+  useEffect(() => {
+    if (gmail?.scan_status !== 'running') return
+    const timer = setInterval(async () => {
+      const { data: { session } } = await createClient().auth.getSession()
+      if (!session) return
+      try {
+        setGmail(await getGmailStatus(session.access_token))
+      } catch {
+        // Transient poll failure — keep the last known state and retry.
+      }
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [gmail?.scan_status])
+
   async function withToken<T>(fn: (token: string) => Promise<T>) {
     const { data: { session } } = await createClient().auth.getSession()
     if (!session) return

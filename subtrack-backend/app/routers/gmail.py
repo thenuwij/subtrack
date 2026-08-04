@@ -13,6 +13,7 @@ os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 import jwt
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import RedirectResponse
+from google.auth.exceptions import RefreshError
 from google_auth_oauthlib.flow import Flow
 from sqlalchemy.orm import Session
 
@@ -104,6 +105,17 @@ def gmail_status(
     account = db.query(GmailAccount).filter(GmailAccount.user_id == user_id).first()
     if not account:
         return {"connected": False}
+
+    # A scan that died without cleaning up would otherwise report "running"
+    # here for the full staleness window: the user stares at a spinner with
+    # the scan button disabled and no error, ever. Flip it to a visible,
+    # retryable failure the moment it's recognisably dead.
+    if account.scan_status == "running" and _scan_is_stale(account):
+        logger.warning("Marking stale scan as failed for %s", user_id)
+        account.scan_status = "error"
+        account.scan_error = INTERRUPTED_MESSAGE
+        db.commit()
+
     return {
         "connected": True,
         "email_address": account.email_address,
@@ -192,10 +204,16 @@ AMOUNT_TOLERANCE = 0.05  # ignore sub-5-cent differences (rounding, FX wobble)
 
 SCAN_MONTHS = 6      # deep enough for quarterly and annual bills
 
-# A scan of a large mailbox takes a few minutes. Past this, a run still marked
-# "running" is assumed dead — the process restarted or was redeployed mid-scan —
-# and a new scan is allowed to supersede it.
-STALE_SCAN_MINUTES = 20
+# A live scan heartbeats scan_started_at as it progresses (every fetch batch,
+# every analysis batch), so "no heartbeat for this long" means the run is dead
+# — killed mid-scan by a redeploy, spin-down, or crash. The worst legitimate
+# gap is one analysis call at its 240s timeout plus one retry, well under this.
+STALE_SCAN_MINUTES = 10
+
+INTERRUPTED_MESSAGE = (
+    "The scan was interrupted before it finished. "
+    "Anything already found is saved — run it again to finish."
+)
 
 
 def _norm(text: str) -> str:
@@ -292,12 +310,64 @@ def _scan_is_stale(account: GmailAccount) -> bool:
     return datetime.utcnow() - started > timedelta(minutes=STALE_SCAN_MINUTES)
 
 
+def _apply_detections(db, user_id, subscriptions, existing_detections, detected):
+    """Fold a batch of analyzer results into the review queue.
+
+    Mutates `existing_detections` in place as rows are added, so calling this
+    per batch is equivalent to one pass over everything at the end.
+    """
+    for found in detected:
+        tracked = _match_subscription(subscriptions, found)
+        previous = _match_detection(existing_detections, found)
+
+        # Dismissed means "stop suggesting this" — a rescan must not nag.
+        # Approved means it already became a subscription; changes to it are
+        # handled through the tracked-subscription branch below.
+        if previous is not None and previous.status != DetectionStatus.pending:
+            if tracked is None or _same_price(tracked, found):
+                continue
+
+        existing_sub_id = None
+        if tracked is not None:
+            if _same_price(tracked, found) and tracked.is_active:
+                continue   # already tracked at this price — nothing to review
+            existing_sub_id = tracked.id
+
+        if previous is not None and previous.status == DetectionStatus.pending:
+            row = previous          # refresh the pending suggestion in place
+        else:
+            row = DetectedSubscription(user_id=user_id)
+            db.add(row)
+            existing_detections.append(row)
+
+        row.merchant = found.merchant
+        row.sender_domain = found.sender_domain
+        row.product_key = (found.product_key or "").strip().lower()
+        row.category = found.category
+        row.cycle = found.cycle
+        row.amount = found.amount
+        row.currency = found.currency
+        row.previous_amount = found.previous_amount
+        row.cancelled = found.cancelled
+        row.confidence = found.confidence
+        row.charge_count = found.charge_count
+        row.existing_subscription_id = existing_sub_id
+        row.status = DetectionStatus.pending
+        row.resolved_at = None
+
+
 def _run_scan(user_id: str):
     """The scan itself. Runs as a background task with its own DB session —
-    the request that started it has long since returned."""
+    the request that started it has long since returned.
+
+    Results are committed batch by batch, not at the end. On a host that can
+    kill the process mid-scan (a redeploy, a free instance spinning down),
+    everything committed so far survives; each commit also refreshes the
+    heartbeat that tells /status the run is still alive.
+    """
     from datetime import datetime
 
-    from app.gmail.analyzer import analyze
+    from app.gmail.analyzer import AnalysisFailed, analyze
     from app.gmail.scanner import scan
 
     db = SessionLocal()
@@ -306,26 +376,38 @@ def _run_scan(user_id: str):
         if not account:
             return
 
+        def heartbeat(*_args):
+            account.scan_started_at = datetime.utcnow()
+            db.commit()
+
+        def fail(message: str) -> None:
+            account.scan_status = "error"
+            account.scan_error = message
+            db.commit()
+
         try:
             candidates = scan(decrypt_token(account.refresh_token_encrypted),
-                              months=SCAN_MONTHS, max_messages=400)
-            detected = analyze(candidates)
+                              months=SCAN_MONTHS, max_messages=400,
+                              on_progress=heartbeat)
         except TokenUndecryptable:
             # Nothing the user did, and nothing they can fix except reconnect.
             # Say that, rather than showing them a cryptography error.
             logger.error("Undecryptable Gmail token for %s — key mismatch", user_id)
-            account.scan_status = "error"
-            account.scan_error = ("Gmail needs reconnecting. Disconnect and connect "
-                                  "again on the Account page.")
-            db.commit()
+            fail("Gmail needs reconnecting. Disconnect and connect "
+                 "again on the Account page.")
             return
-        except Exception as exc:
+        except RefreshError:
+            # The refresh token was revoked or expired — Google said no, and
+            # will keep saying no until the user grants access again.
+            logger.warning("Gmail refresh token rejected for %s", user_id)
+            fail("Google no longer accepts Subtrack's access to this inbox. "
+                 "Disconnect and connect again on the Account page.")
+            return
+        except Exception:
             # Internal detail belongs in the log, not on the user's screen.
             logger.exception("Scan failed for %s", user_id)
-            account.scan_status = "error"
-            account.scan_error = ("Could not finish reading your inbox. Try again, "
-                                  "or reconnect Gmail if it keeps failing.")
-            db.commit()
+            fail("Could not finish reading your inbox. Try again, "
+                 "or reconnect Gmail if it keeps failing.")
             return
 
         subscriptions = db.query(Subscription).filter(
@@ -336,44 +418,26 @@ def _run_scan(user_id: str):
             DetectedSubscription.user_id == user_id
         ).all()
 
-        for found in detected:
-            tracked = _match_subscription(subscriptions, found)
-            previous = _match_detection(existing_detections, found)
+        def apply_batch(found):
+            # Committing per batch is what makes results appear while the scan
+            # runs — and doubles as the liveness signal during analysis.
+            _apply_detections(db, user_id, subscriptions, existing_detections, found)
+            heartbeat()
 
-            # Dismissed means "stop suggesting this" — a rescan must not nag.
-            # Approved means it already became a subscription; changes to it are
-            # handled through the tracked-subscription branch below.
-            if previous is not None and previous.status != DetectionStatus.pending:
-                if tracked is None or _same_price(tracked, found):
-                    continue
-
-            existing_sub_id = None
-            if tracked is not None:
-                if _same_price(tracked, found) and tracked.is_active:
-                    continue   # already tracked at this price — nothing to review
-                existing_sub_id = tracked.id
-
-            if previous is not None and previous.status == DetectionStatus.pending:
-                row = previous          # refresh the pending suggestion in place
-            else:
-                row = DetectedSubscription(user_id=user_id)
-                db.add(row)
-                existing_detections.append(row)
-
-            row.merchant = found.merchant
-            row.sender_domain = found.sender_domain
-            row.product_key = (found.product_key or "").strip().lower()
-            row.category = found.category
-            row.cycle = found.cycle
-            row.amount = found.amount
-            row.currency = found.currency
-            row.previous_amount = found.previous_amount
-            row.cancelled = found.cancelled
-            row.confidence = found.confidence
-            row.charge_count = found.charge_count
-            row.existing_subscription_id = existing_sub_id
-            row.status = DetectionStatus.pending
-            row.resolved_at = None
+        try:
+            detected = analyze(candidates, on_batch=apply_batch)
+        except AnalysisFailed:
+            # Distinct from "found nothing": none of the inbox was analyzed,
+            # and reporting an empty success would be a lie.
+            logger.exception("Analysis failed entirely for %s", user_id)
+            fail("Your inbox was read but couldn't be analysed this time. "
+                 "Try again in a few minutes.")
+            return
+        except Exception:
+            logger.exception("Scan failed for %s", user_id)
+            fail("Could not finish reading your inbox. Try again, "
+                 "or reconnect Gmail if it keeps failing.")
+            return
 
         # Flag detections that duplicate something already tracked under a
         # different name. Done after the rows exist so every pending suggestion

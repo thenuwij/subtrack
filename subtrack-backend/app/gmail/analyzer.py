@@ -15,7 +15,8 @@ like Stripe can be split into their real merchants because all their subjects
 are visible side by side.
 """
 import logging
-from typing import Literal
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, Literal
 
 import anthropic
 from pydantic import BaseModel, Field
@@ -25,12 +26,31 @@ from app.gmail.scanner import ReceiptCandidate
 
 logger = logging.getLogger(__name__)
 
-client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+# The SDK's default timeout is 10 minutes per call. A call that slow would
+# outlive the scan's staleness window and make a live scan look dead, so cap
+# it: fail the batch and move on rather than hang the whole scan.
+client = anthropic.Anthropic(
+    api_key=settings.anthropic_api_key,
+    timeout=240.0,
+    max_retries=1,
+)
 
 MODEL = "claude-opus-5"
 
 # How many sender-domain groups to analyze per API call.
 GROUPS_PER_CALL = 8
+
+# Analysis calls are network-bound and independent (domains are disjoint), so
+# they parallelize cleanly. This is what the scan's wall time is made of: at 8
+# groups per call a first scan is easily 5-10 calls of 30-90s each, which
+# sequentially is most of "why is this taking so long".
+MAX_CONCURRENT_CALLS = 3
+
+
+class AnalysisFailed(Exception):
+    """Every analysis batch failed. Distinct from finding nothing: reporting
+    an empty result here would tell the user their inbox has no subscriptions
+    when in truth none of it was analyzed."""
 
 
 class DetectedSubscription(BaseModel):
@@ -154,49 +174,85 @@ def _render_group(domain: str, emails: list[ReceiptCandidate]) -> str:
     return "\n".join(lines)
 
 
-def analyze(candidates: list[ReceiptCandidate]) -> list[DetectedSubscription]:
-    """Analyze all candidates, including those without a parsed amount —
-    cancellation notices and failed payments carry no amount but real signal."""
-    groups = _group_by_domain(candidates)
-    domains = sorted(groups, key=lambda d: -len(groups[d]))
+def _analyze_chunk(
+    chunk: list[str],
+    groups: dict[str, list[ReceiptCandidate]],
+) -> list[DetectedSubscription]:
+    """One API call over a set of sender domains. Raises on failure so the
+    caller can tell a failed batch from a batch that found nothing."""
+    prompt = (
+        "Find the paid recurring subscriptions in these email timelines:\n\n"
+        + "\n\n".join(_render_group(d, groups[d]) for d in chunk)
+    )
+
+    response = client.messages.parse(
+        model=MODEL,
+        max_tokens=16000,
+        output_config={"effort": "medium"},
+        output_format=AnalysisResult,
+        system=SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    if response.stop_reason == "refusal" or response.parsed_output is None:
+        raise RuntimeError(f"no output (stop_reason={response.stop_reason})")
 
     results: list[DetectedSubscription] = []
-
-    for start in range(0, len(domains), GROUPS_PER_CALL):
-        chunk = domains[start:start + GROUPS_PER_CALL]
-        prompt = (
-            "Find the paid recurring subscriptions in these email timelines:\n\n"
-            + "\n\n".join(_render_group(d, groups[d]) for d in chunk)
-        )
-
-        try:
-            response = client.messages.parse(
-                model=MODEL,
-                max_tokens=16000,
-                output_config={"effort": "medium"},
-                output_format=AnalysisResult,
-                system=SYSTEM,
-                messages=[{"role": "user", "content": prompt}],
-            )
-        except Exception as exc:
-            logger.error("Analysis batch at %d failed: %s: %s", start, type(exc).__name__, exc)
+    for sub in response.parsed_output.subscriptions:
+        # The model only knows the domains it was shown; anything else is a slip.
+        if sub.sender_domain not in chunk:
+            logger.warning("Dropping result for unknown domain %r", sub.sender_domain)
             continue
-
-        if response.stop_reason == "refusal" or response.parsed_output is None:
-            logger.error("Analysis batch at %d returned no output (stop_reason=%s)",
-                         start, response.stop_reason)
+        # A bill with no amount can't be tracked as a cost.
+        if sub.amount is None or sub.amount <= 0:
+            logger.info("Dropping %r — no usable amount", sub.merchant)
             continue
+        results.append(sub)
+    return results
 
-        for sub in response.parsed_output.subscriptions:
-            # The model only knows the domains it was shown; anything else is a slip.
-            if sub.sender_domain not in chunk:
-                logger.warning("Dropping result for unknown domain %r", sub.sender_domain)
+
+def analyze(
+    candidates: list[ReceiptCandidate],
+    on_batch: Callable[[list[DetectedSubscription]], None] | None = None,
+) -> list[DetectedSubscription]:
+    """Analyze all candidates, including those without a parsed amount —
+    cancellation notices and failed payments carry no amount but real signal.
+
+    `on_batch` fires as each batch completes (possibly with an empty list) —
+    it's how the scan streams partial results out and proves it's still alive.
+    Domains are disjoint across batches, so per-batch results never overlap.
+
+    Raises AnalysisFailed when every batch errored.
+    """
+    groups = _group_by_domain(candidates)
+    domains = sorted(groups, key=lambda d: -len(groups[d]))
+    chunks = [domains[i:i + GROUPS_PER_CALL] for i in range(0, len(domains), GROUPS_PER_CALL)]
+    if not chunks:
+        return []
+
+    results: list[DetectedSubscription] = []
+    failed = 0
+
+    with ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_CALLS, len(chunks))) as pool:
+        futures = {pool.submit(_analyze_chunk, chunk, groups): chunk for chunk in chunks}
+        for future in as_completed(futures):
+            chunk = futures[future]
+            try:
+                found = _dedupe(future.result())
+            except Exception as exc:
+                failed += 1
+                logger.error("Analysis batch %r… failed: %s: %s",
+                             chunk[0], type(exc).__name__, exc)
                 continue
-            # A bill with no amount can't be tracked as a cost.
-            if sub.amount is None or sub.amount <= 0:
-                logger.info("Dropping %r — no usable amount", sub.merchant)
-                continue
-            results.append(sub)
+            results.extend(found)
+            if on_batch is not None:
+                on_batch(found)
+
+    if failed == len(chunks):
+        raise AnalysisFailed(f"all {failed} analysis batches failed")
+    if failed:
+        logger.warning("%d of %d analysis batches failed — results may be incomplete",
+                       failed, len(chunks))
 
     return _dedupe(results)
 

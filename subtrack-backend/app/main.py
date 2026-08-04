@@ -45,6 +45,28 @@ def on_startup():
     if settings.google_client_id:
         from app.gmail.crypto import check_configured
         check_configured()
+
+    # Background scans don't survive a restart. Any scan marked "running" at
+    # boot is dead — this process is the only one that runs them (single
+    # instance, see render.yaml) — so mark it failed now rather than leaving
+    # a spinner up until the staleness window expires. Partial results are
+    # already committed batch-by-batch, so nothing found is lost.
+    from app.database import SessionLocal
+    from app.models import GmailAccount
+    from app.routers.gmail import INTERRUPTED_MESSAGE
+    db = SessionLocal()
+    try:
+        interrupted = (
+            db.query(GmailAccount)
+            .filter(GmailAccount.scan_status == "running")
+            .update({"scan_status": "error", "scan_error": INTERRUPTED_MESSAGE})
+        )
+        if interrupted:
+            db.commit()
+            logger.warning("Marked %d interrupted scan(s) as failed at startup", interrupted)
+    finally:
+        db.close()
+
     logger.info("Subtrack API started")
 
 @app.get("/")
