@@ -136,19 +136,6 @@ class DetectedSubscription(Base):
     detected_at = Column(DateTime, server_default=func.now())
     resolved_at = Column(DateTime, nullable=True)
 
-class SavingsGoal(Base):
-    __tablename__ = "savings_goals"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(String, nullable=False, index=True)
-    name = Column(String, nullable=False)
-    target_amount = Column(Float, nullable=False)
-    current_amount = Column(Float, default=0.0)
-    currency = Column(String, default="AUD")
-    target_date = Column(DateTime, nullable=True)
-    created_by = Column(String, default="user")
-    created_at = Column(DateTime, server_default=func.now())
-    completed_at = Column(DateTime, nullable=True)
-
 class UserPreference(Base):
     __tablename__ = "user_preferences"
     user_id = Column(String, primary_key=True)        # Supabase user ID

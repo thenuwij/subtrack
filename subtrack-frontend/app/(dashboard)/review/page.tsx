@@ -231,7 +231,7 @@ export default function ReviewPage() {
         )}
 
         {!gmail?.connected ? (
-          <div className="rounded-2xl bg-card p-6 shadow-md">
+          <div className="rounded-2xl bg-card p-6 shadow-sm">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <Mail className="h-5 w-5" />
@@ -259,7 +259,7 @@ export default function ReviewPage() {
         ) : null}
 
         {scanning && (
-          <div className="rounded-2xl bg-card p-6 shadow-md">
+          <div className="rounded-2xl bg-card p-6 shadow-sm">
             <p className="text-sm font-medium text-foreground">Reading your inbox…</p>
             <p className="mt-1 text-sm text-muted-foreground">
               The first scan of a busy inbox can take several minutes. Results
@@ -299,7 +299,7 @@ export default function ReviewPage() {
               return (
                 <div
                   key={item.id}
-                  className="rounded-2xl bg-card p-5 shadow-md"
+                  className="rounded-2xl bg-card p-5 shadow-sm"
                 >
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0 space-y-2">
@@ -358,7 +358,10 @@ export default function ReviewPage() {
                       </p>
 
                       {item.previous_amount !== null && (
-                        <p className="flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+                        <p
+                          className="flex items-center gap-1 text-xs font-medium"
+                          style={{ color: rose ? 'var(--increase)' : 'var(--decrease)' }}
+                        >
                           {rose && <ArrowUpRight className="h-3 w-3" />}
                           {formatCurrency(item.previous_amount, item.currency)} →{' '}
                           {formatCurrency(item.amount, item.currency)}

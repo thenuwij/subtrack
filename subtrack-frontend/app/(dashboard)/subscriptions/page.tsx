@@ -169,7 +169,7 @@ export default function SubscriptionsPage() {
 
   function renderList(items: Subscription[]) {
     return (
-      <div className="rounded-2xl bg-card shadow-md overflow-hidden divide-y divide-border">
+      <div className="rounded-2xl bg-card shadow-sm overflow-hidden divide-y divide-border">
         {items.map(sub => (
           <SubscriptionCard
             key={sub.id}
@@ -207,16 +207,17 @@ export default function SubscriptionsPage() {
     <div className="mx-auto w-full max-w-5xl px-4 py-8 space-y-6">
 
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Recurring payments</h1>
           {!loading && subscriptions.length > 0 && (
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {active.length} active · ~{formatCurrency(totalMonthly, baseCurrency)}/mo
+            <p className="text-sm text-muted-foreground mt-1 tabular-nums">
+              {active.length} active · {formatCurrency(totalMonthly, baseCurrency)}/mo ·{' '}
+              {formatCurrency(totalMonthly * 12, baseCurrency)}/yr
             </p>
           )}
         </div>
-        <Button onClick={() => setModalOpen(true)} size="sm">
+        <Button onClick={() => setModalOpen(true)} className="shrink-0">
           <Plus className="w-4 h-4 mr-1.5" />
           Add payment
         </Button>
@@ -264,12 +265,24 @@ export default function SubscriptionsPage() {
         </div>
       )}
 
-      {/* Loading */}
+      {/* Loading — shaped like the list it becomes, so the page doesn't
+          rearrange itself when the data lands. */}
       {loading && (
-        <div className="space-y-3">
-          {[...Array(4)].map((_, i) => (
-            <Skeleton key={i} className="h-[52px] w-full rounded-lg" />
-          ))}
+        <div aria-busy="true" aria-live="polite">
+          <span className="sr-only">Loading your recurring payments</span>
+          <Skeleton className="h-10 w-full rounded-xl" />
+          <div className="mt-4 divide-y divide-border overflow-hidden rounded-2xl bg-card shadow-sm">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="flex items-center gap-3 px-4 py-3.5">
+                <Skeleton className="h-2 w-2 shrink-0 rounded-full" />
+                <div className="flex-1 space-y-1.5">
+                  <Skeleton className="h-4 w-40" />
+                  <Skeleton className="h-3 w-28" />
+                </div>
+                <Skeleton className="h-4 w-20" />
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

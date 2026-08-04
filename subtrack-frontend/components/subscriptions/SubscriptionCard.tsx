@@ -6,18 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Trash2, Pencil } from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
-import { formatCategory } from '@/lib/utils/categories'
-
-const CATEGORY_DOT: Record<string, string> = {
-  streaming:  'bg-purple-500',
-  software:   'bg-blue-500',
-  cloud:      'bg-sky-500',
-  utilities:  'bg-yellow-500',
-  fitness:    'bg-green-500',
-  food:       'bg-orange-500',
-  transport:  'bg-red-500',
-  other:      'bg-muted-foreground',
-}
+import { categoryColor, formatCategory } from '@/lib/utils/categories'
 
 const CYCLE_LABEL: Record<string, string> = {
   weekly:  '/wk',
@@ -54,14 +43,16 @@ export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
     }
   }
 
-  const dotClass = CATEGORY_DOT[subscription.category] ?? 'bg-muted-foreground'
-
   return (
     <div className="flex flex-col gap-3 px-4 py-3 transition-colors hover:bg-muted/40 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
 
       {/* Left — dot + name + subtitle */}
       <div className="flex items-center gap-3 flex-1 min-w-0">
-        <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} />
+        <span
+          className="w-2 h-2 rounded-full shrink-0"
+          style={{ backgroundColor: categoryColor(subscription.category) }}
+          aria-hidden="true"
+        />
         <div className="min-w-0">
           <p className="font-medium text-sm truncate leading-tight">{subscription.name}</p>
           <p className="text-xs text-muted-foreground mt-0.5">

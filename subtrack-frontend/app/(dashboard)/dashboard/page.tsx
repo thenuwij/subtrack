@@ -2,17 +2,25 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ArrowDownRight, ArrowRight, ArrowUpRight, ChevronDown, ChevronUp, CreditCard, Mail, Minus } from 'lucide-react'
+import {
+  ArrowDownRight,
+  ArrowRight,
+  ArrowUpRight,
+  ChevronDown,
+  ChevronUp,
+  Mail,
+  Minus,
+  Sparkles,
+} from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { getGmailStatus, getSubscriptions, getSubscriptionChanges, getPreferences } from '@/lib/api'
 import type { GmailStatus, Subscription, SubscriptionChange } from '@/types'
 import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
-import { formatCategory } from '@/lib/utils/categories'
-
-function Skeleton({ className }: { className?: string }) {
-  return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
-}
+import { categoryColor } from '@/lib/utils/categories'
+import { SpendBreakdown } from '@/components/dashboard/SpendBreakdown'
+import { DashboardSkeleton } from '@/components/dashboard/DashboardSkeleton'
+import { Button } from '@/components/ui/button'
 
 // 52 weeks / 12 months. Using 4.33 loses ~0.04 of a week each month, which
 // compounds to a visibly short annual figure on a large weekly bill like rent.
@@ -28,20 +36,12 @@ function formatDate(date: string) {
   return new Date(date).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
 }
 
-// Framing only — a share of income, not a judgement about what anyone should spend.
-function getShareTone(percent: number) {
-  if (percent >= 20) return 'text-destructive'
-  if (percent >= 10) return 'text-amber-600 dark:text-amber-400'
-  return 'text-foreground'
-}
-
 export default function DashboardPage() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
   const [changes, setChanges] = useState<SubscriptionChange[]>([])
   const [monthlyIncome, setMonthlyIncome] = useState<number | null>(null)
   const [gmail, setGmail] = useState<GmailStatus | null>(null)
   const [changesExpanded, setChangesExpanded] = useState(false)
-  const [spendingExpanded, setSpendingExpanded] = useState(false)
   const [loading, setLoading] = useState(true)
   const { baseCurrency, convertAmount } = useCurrency()
 
@@ -72,8 +72,6 @@ export default function DashboardPage() {
     fetchData()
   }, [])
 
-  const currentMonth = new Date()
-
   // Everything is normalised to a monthly figure in the base currency so the
   // numbers on this page are actually comparable to each other.
   const ranked = useMemo(() => {
@@ -98,135 +96,188 @@ export default function DashboardPage() {
     [changes, convertAmount]
   )
 
-  if (loading) {
+  // The hero bar, in the same colours as the breakdown below it, so the two
+  // read as one system rather than two unrelated charts.
+  const heroSegments = useMemo(() => {
+    const totals = new Map<string, number>()
+    for (const { subscription, monthly } of ranked) {
+      const key = subscription.category ?? 'other'
+      totals.set(key, (totals.get(key) ?? 0) + monthly)
+    }
+    return [...totals.entries()]
+      .map(([category, total]) => ({
+        category,
+        share: monthlyTotal > 0 ? (total / monthlyTotal) * 100 : 0,
+      }))
+      .sort((a, b) => b.share - a.share)
+  }, [ranked, monthlyTotal])
+
+  if (loading) return <DashboardSkeleton />
+
+  const hasPayments = subscriptions.length > 0
+
+  // First run is the product's one chance to explain itself. A dashboard of
+  // zeroes explains nothing, so the empty state sells the thing that makes
+  // this worth using instead.
+  if (!hasPayments) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <div className="space-y-8">
-          <div className="space-y-3">
-            <Skeleton className="h-8 w-56" />
-            <Skeleton className="h-4 w-72" />
+      <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 lg:px-8">
+        <div className="text-center">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+            <Sparkles className="h-7 w-7" />
           </div>
-          <Skeleton className="h-44 rounded-2xl" />
-          <Skeleton className="h-64 rounded-2xl" />
+          <h1 className="mt-6 text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+            Let&apos;s find what you&apos;re paying for
+          </h1>
+          <p className="mx-auto mt-3 max-w-lg text-base text-muted-foreground">
+            Subtrack reads the receipts already sitting in your inbox and works out
+            which ones are recurring — so you don&apos;t have to remember them.
+          </p>
+
+          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <Button asChild size="lg">
+              <Link href={gmail?.connected ? '/review' : '/account#inbox'}>
+                {gmail?.connected ? 'Review what we found' : 'Connect Gmail'}
+                <ArrowRight className="ml-1.5 h-4 w-4" />
+              </Link>
+            </Button>
+            <Button asChild variant="ghost" size="lg">
+              <Link href="/subscriptions">Add one manually</Link>
+            </Button>
+          </div>
         </div>
+
+        <ol className="mx-auto mt-14 grid max-w-2xl gap-6 text-left sm:grid-cols-3">
+          {[
+            { step: '1', title: 'Connect Gmail', body: 'Read-only access to receipt emails. Nothing else is touched.' },
+            { step: '2', title: 'We scan for receipts', body: 'Repeated charges from the same biller become a suggestion.' },
+            { step: '3', title: 'You approve', body: 'Nothing joins your list until you say so.' },
+          ].map(item => (
+            <li key={item.step}>
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+                {item.step}
+              </span>
+              <p className="mt-3 text-sm font-semibold text-foreground">{item.title}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{item.body}</p>
+            </li>
+          ))}
+        </ol>
       </div>
     )
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="space-y-8">
-        <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-          <div className="space-y-2">
-            <p className="text-sm font-medium text-primary">Overview</p>
-            <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-              Keep track of your recurring payments
-            </h1>
-            <p className="max-w-2xl text-sm text-muted-foreground sm:text-base">
-              Subscriptions, rent, bills, memberships, and every other payment that keeps
-              coming back.
-            </p>
-          </div>
+    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="space-y-10">
 
-          <div className="rounded-xl bg-card px-4 py-3 shadow-md">
-            <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">
-              Current month
+        {/* ── Hero ────────────────────────────────────────────────────────
+            No card, no border, no icon chip. One number, given the room to
+            be the thing you look at first. */}
+        <section>
+          <div className="flex items-start justify-between gap-4">
+            <p className="text-sm font-medium text-muted-foreground">
+              Your monthly commitment
             </p>
-            <p className="mt-1 text-sm font-medium text-foreground">
-              {currentMonth.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' })}
-            </p>
-          </div>
-        </section>
-
-        {/* The headline number */}
-        <section className="rounded-2xl bg-card p-6 shadow-md">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                <CreditCard className="h-5 w-5" />
-              </div>
-              <p className="text-sm font-medium text-foreground">Monthly commitment</p>
-            </div>
             <Link
               href="/subscriptions"
-              className="inline-flex items-center gap-1.5 self-start rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+              className="shrink-0 text-sm font-medium text-primary hover:underline"
             >
-              Manage payments
-              <ArrowRight className="h-4 w-4" />
+              Manage
             </Link>
           </div>
 
-          <p className="mt-4 text-5xl font-bold tracking-tight tabular-nums text-foreground">
+          <p className="mt-2 text-5xl font-semibold tracking-tight tabular-nums text-foreground sm:text-6xl">
             {formatCurrency(monthlyTotal, baseCurrency)}
           </p>
 
-          <div className="mt-4 flex flex-col gap-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:gap-6">
-            <span>
+          <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-muted-foreground">
+            <span className="tabular-nums">
               {formatCurrency(monthlyTotal * 12, baseCurrency)} a year
             </span>
-            <span>
+            <span className="tabular-nums">
               {subscriptions.length} active payment{subscriptions.length === 1 ? '' : 's'}
             </span>
             {shareOfIncome !== null ? (
-              <span className={getShareTone(shareOfIncome)}>
-                {shareOfIncome.toFixed(1)}% of your monthly income
+              // Stated plainly. Colouring this red would be scolding someone
+              // for their rent, which is not a judgement this app should make.
+              <span className="tabular-nums">
+                <span className="font-medium text-foreground">
+                  {shareOfIncome.toFixed(0)}%
+                </span>{' '}
+                of your income
               </span>
             ) : (
-              <Link href="/account" className="text-primary underline underline-offset-4">
+              <Link href="/account" className="text-primary hover:underline">
                 Add your income to see this as a share
               </Link>
             )}
           </div>
+
+          {heroSegments.length > 0 && (
+            <div
+              className="mt-6 flex h-2.5 w-full gap-0.5 overflow-hidden rounded-full"
+              aria-hidden="true"
+            >
+              {heroSegments.map(segment => (
+                <div
+                  key={segment.category}
+                  className="h-full first:rounded-l-full last:rounded-r-full"
+                  style={{
+                    width: `${Math.max(segment.share, 0.8)}%`,
+                    backgroundColor: categoryColor(segment.category),
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </section>
 
-        {gmail && (
-          <section className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 shadow-md sm:flex-row sm:items-center sm:justify-between">
+        {/* ── Inbox nudge — only while there's something to act on ─────── */}
+        {gmail && !gmail.connected && (
+          <section className="flex flex-col gap-4 rounded-2xl bg-card p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-start gap-3">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <Mail className="h-4 w-4" />
               </div>
               <div>
                 <p className="text-sm font-semibold text-foreground">
-                  {gmail.connected ? 'Your inbox is connected' : 'Find recurring payments from your email'}
+                  Find the ones you&apos;ve forgotten
                 </p>
                 <p className="mt-0.5 text-sm text-muted-foreground">
-                  {gmail.connected
-                    ? 'Review anything Subtrack finds before it is added to your list.'
-                    : 'Connect Gmail to scan receipt emails. It is read-only, and nothing is added without your approval.'}
+                  Connect Gmail and Subtrack will spot recurring charges in your
+                  receipts. Read-only, and nothing is added without your approval.
                 </p>
               </div>
             </div>
-            <Link
-              href={gmail.connected ? '/review' : '/account#inbox'}
-              className="inline-flex shrink-0 items-center gap-1.5 self-start text-sm font-medium text-primary hover:underline sm:self-center"
-            >
-              {gmail.connected ? 'Review inbox' : 'Connect Gmail'}
-              <ArrowRight className="h-4 w-4" />
-            </Link>
+            <Button asChild className="shrink-0 self-start sm:self-center">
+              <Link href="/account#inbox">Connect Gmail</Link>
+            </Button>
           </section>
         )}
 
-        {/* What changed */}
-        <section className="rounded-2xl bg-card p-6 shadow-md">
-          <div className="mb-5 flex items-start justify-between gap-4">
+        {/* ── Where your money goes ───────────────────────────────────── */}
+        <SpendBreakdown
+          ranked={ranked}
+          monthlyTotal={monthlyTotal}
+          baseCurrency={baseCurrency}
+        />
+
+        {/* ── What changed ────────────────────────────────────────────── */}
+        <section className="rounded-2xl bg-card p-6 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-lg font-semibold text-foreground">What changed</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <h2 className="text-base font-semibold text-foreground">What changed</h2>
+              <p className="mt-0.5 text-sm text-muted-foreground">
                 Additions, price rises, and cancellations in the last 30 days.
               </p>
             </div>
-            {changes.length > 0 && (
+            {changes.length > 0 && netChange !== 0 && (
               <div className="shrink-0 text-right">
                 <p
-                  className={`text-sm font-semibold tabular-nums ${
-                    netChange > 0
-                      ? 'text-destructive'
-                      : netChange < 0
-                        ? 'text-emerald-600 dark:text-emerald-400'
-                        : 'text-foreground'
-                  }`}
+                  className="text-sm font-semibold tabular-nums"
+                  style={{ color: netChange > 0 ? 'var(--increase)' : 'var(--decrease)' }}
                 >
-                  {netChange > 0 ? '+' : netChange < 0 ? '−' : ''}
+                  {netChange > 0 ? '+' : '−'}
                   {formatCurrency(Math.abs(netChange), baseCurrency)}
                 </p>
                 <p className="text-xs text-muted-foreground">net per month</p>
@@ -235,180 +286,87 @@ export default function DashboardPage() {
           </div>
 
           {changes.length === 0 ? (
-            <div className="flex min-h-[140px] items-center justify-center rounded-xl border border-dashed border-border bg-muted/30">
-              <div className="text-center">
-                <p className="text-sm font-medium text-foreground">Nothing changed</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Your recurring payments cost the same as they did last month.
-                </p>
-              </div>
+            <div className="mt-6 py-8 text-center">
+              <p className="text-sm font-medium text-foreground">Nothing changed</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Your recurring payments cost the same as they did last month.
+              </p>
             </div>
           ) : (
-            <div id="dashboard-changes-list" className="space-y-3">
-              {(changesExpanded ? changes : changes.slice(0, 3)).map((change) => {
+            <ul id="dashboard-changes-list" className="mt-4 divide-y divide-border">
+              {(changesExpanded ? changes : changes.slice(0, 4)).map((change) => {
                 const delta = convertAmount(change.delta, change.currency)
-                const isIncrease = delta > 0
+                const tone =
+                  delta > 0 ? 'var(--increase)' : delta < 0 ? 'var(--decrease)' : undefined
 
                 return (
-                  <div
-                    key={change.id}
-                    className="flex items-center justify-between gap-4 rounded-xl border border-border bg-background/60 p-4"
-                  >
-                    <div className="flex min-w-0 items-center gap-3">
-                      <div
-                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
-                          isIncrease
-                            ? 'bg-destructive/10 text-destructive'
-                            : delta < 0
-                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                              : 'bg-muted text-muted-foreground'
-                        }`}
-                      >
-                        {isIncrease ? (
-                          <ArrowUpRight className="h-4 w-4" />
-                        ) : delta < 0 ? (
-                          <ArrowDownRight className="h-4 w-4" />
-                        ) : (
-                          <Minus className="h-4 w-4" />
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-foreground">
-                          {change.name}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {change.kind === 'added'
-                            ? 'Added'
-                            : change.kind === 'removed'
-                              ? 'Cancelled'
-                              : `${formatCurrency(
-                                  convertAmount(change.old_monthly ?? 0, change.currency),
-                                  baseCurrency
-                                )} → ${formatCurrency(
-                                  convertAmount(change.new_monthly ?? 0, change.currency),
-                                  baseCurrency
-                                )}`}{' '}
-                          · {formatDate(change.changed_at)}
-                        </p>
-                      </div>
+                  <li key={change.id} className="flex items-center gap-3 py-3">
+                    <div
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                      style={{
+                        backgroundColor: tone
+                          ? `color-mix(in oklch, ${tone} 12%, transparent)`
+                          : 'var(--muted)',
+                        color: tone ?? 'var(--muted-foreground)',
+                      }}
+                    >
+                      {delta > 0 ? (
+                        <ArrowUpRight className="h-4 w-4" />
+                      ) : delta < 0 ? (
+                        <ArrowDownRight className="h-4 w-4" />
+                      ) : (
+                        <Minus className="h-4 w-4" />
+                      )}
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {change.name}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {change.kind === 'added'
+                          ? 'Added'
+                          : change.kind === 'removed'
+                            ? 'Cancelled'
+                            : `${formatCurrency(
+                                convertAmount(change.old_monthly ?? 0, change.currency),
+                                baseCurrency
+                              )} → ${formatCurrency(
+                                convertAmount(change.new_monthly ?? 0, change.currency),
+                                baseCurrency
+                              )}`}{' '}
+                        · {formatDate(change.changed_at)}
+                      </p>
                     </div>
 
                     <p
-                      className={`shrink-0 text-sm font-semibold tabular-nums ${
-                        isIncrease
-                          ? 'text-destructive'
-                          : delta < 0
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : 'text-muted-foreground'
-                      }`}
+                      className="shrink-0 text-sm font-semibold tabular-nums"
+                      style={{ color: tone ?? 'var(--muted-foreground)' }}
                     >
-                      {isIncrease ? '+' : delta < 0 ? '−' : ''}
+                      {delta > 0 ? '+' : delta < 0 ? '−' : ''}
                       {formatCurrency(Math.abs(delta), baseCurrency)}/mo
                     </p>
-                  </div>
+                  </li>
                 )
               })}
-              {changes.length > 3 && (
-                <button
-                  type="button"
-                  aria-expanded={changesExpanded}
-                  aria-controls="dashboard-changes-list"
-                  onClick={() => setChangesExpanded(value => !value)}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  {changesExpanded ? (
-                    <><ChevronUp className="h-4 w-4" /> Show less</>
-                  ) : (
-                    <><ChevronDown className="h-4 w-4" /> Show {changes.length - 3} more</>
-                  )}
-                </button>
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* Where the money actually goes */}
-        <section className="rounded-2xl bg-card p-6 shadow-md">
-          <div className="mb-5">
-            <h2 className="text-lg font-semibold text-foreground">Where your money goes</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Your highest recurring costs, shown as a share of your total.
-            </p>
-          </div>
-
-          {ranked.length === 0 ? (
-            <div className="flex min-h-[180px] items-center justify-center rounded-xl border border-dashed border-border bg-muted/30">
-              <div className="text-center">
-                <p className="text-sm font-medium text-foreground">No recurring payments yet</p>
-                <Link
-                  href="/subscriptions"
-                  className="mt-1 inline-block text-sm text-primary underline underline-offset-4"
-                >
-                  Add your first payment
-                </Link>
-              </div>
-            </div>
-          ) : (
-            <div id="dashboard-spending-list" className="space-y-3">
-              {(spendingExpanded ? ranked : ranked.slice(0, 5)).map(({ subscription, monthly }) => {
-                const share = monthlyTotal > 0 ? (monthly / monthlyTotal) * 100 : 0
-
-                return (
-                  <div
-                    key={subscription.id}
-                    className="rounded-xl border border-border bg-background/60 p-4"
+              {changes.length > 4 && (
+                <li>
+                  <button
+                    type="button"
+                    aria-expanded={changesExpanded}
+                    aria-controls="dashboard-changes-list"
+                    onClick={() => setChangesExpanded(value => !value)}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-foreground">
-                          {subscription.name}
-                        </p>
-                        <p className="text-xs capitalize text-muted-foreground">
-                          {formatCategory(subscription.category)} · {subscription.cycle}
-                          {subscription.currency !== baseCurrency &&
-                            ` · ${formatCurrency(subscription.amount, subscription.currency)}`}
-                        </p>
-                      </div>
-
-                      <div className="shrink-0 text-right">
-                        <p className="text-sm font-semibold tabular-nums text-foreground">
-                          {formatCurrency(monthly * 12, baseCurrency)}
-                          <span className="font-normal text-muted-foreground">/yr</span>
-                        </p>
-                        <p className="text-xs tabular-nums text-muted-foreground">
-                          {formatCurrency(monthly, baseCurrency)}/mo
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                      <div
-                        className="h-full rounded-full bg-primary transition-all"
-                        style={{ width: `${share}%` }}
-                      />
-                    </div>
-                    <p className="mt-1.5 text-xs tabular-nums text-muted-foreground">
-                      {share.toFixed(0)}% of your recurring spend
-                    </p>
-                  </div>
-                )
-              })}
-              {ranked.length > 5 && (
-                <button
-                  type="button"
-                  aria-expanded={spendingExpanded}
-                  aria-controls="dashboard-spending-list"
-                  onClick={() => setSpendingExpanded(value => !value)}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  {spendingExpanded ? (
-                    <><ChevronUp className="h-4 w-4" /> Show less</>
-                  ) : (
-                    <><ChevronDown className="h-4 w-4" /> Show all {ranked.length}</>
-                  )}
-                </button>
+                    {changesExpanded ? (
+                      <><ChevronUp className="h-4 w-4" /> Show less</>
+                    ) : (
+                      <><ChevronDown className="h-4 w-4" /> Show {changes.length - 4} more</>
+                    )}
+                  </button>
+                </li>
               )}
-            </div>
+            </ul>
           )}
         </section>
       </div>

@@ -202,7 +202,13 @@ def gmail_callback(code: str, state: str, db: Session = Depends(get_db)):
 
 AMOUNT_TOLERANCE = 0.05  # ignore sub-5-cent differences (rounding, FX wobble)
 
-SCAN_MONTHS = 6      # deep enough for quarterly and annual bills
+# Every scan looks back 3 months. Six was measured to be better at catching
+# slow-cycling bills — an every-2-months energy bill shows 4 charges in 6
+# months but only 1 in 3, too few to establish a cycle — but it costs roughly
+# double the emails, model calls and wall time on every scan. While the app is
+# early, speed wins; revisit the deeper window (or a deep first scan and
+# shallow rescans, which is what this used to do) once scans feel fast.
+SCAN_MONTHS = 3
 
 # A live scan heartbeats scan_started_at as it progresses (every fetch batch,
 # every analysis batch), so "no heartbeat for this long" means the run is dead
