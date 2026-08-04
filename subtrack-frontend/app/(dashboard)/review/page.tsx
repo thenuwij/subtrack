@@ -16,6 +16,7 @@ import type { DetectedSubscription, GmailStatus } from '@/types'
 import { formatCurrency } from '@/lib/utils/currency'
 import { Button } from '@/components/ui/button'
 import { formatCategory } from '@/lib/utils/categories'
+import { toast } from 'sonner'
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
@@ -158,8 +159,15 @@ export default function ReviewPage() {
   async function rescan() {
     const t = await token()
     if (!t) return
-    await startGmailScan(t)
-    setGmail(g => (g ? { ...g, scan_status: 'running' } : g))
+    try {
+      await startGmailScan(t)
+      setGmail(g => (g ? { ...g, scan_status: 'running', scan_error: null } : g))
+    } catch (e) {
+      // Leave the button usable and say why — a silently ignored click reads
+      // as the app being broken.
+      const message = e instanceof Error ? e.message : 'Could not start the inbox scan.'
+      toast.error(message)
+    }
   }
 
   if (loading) {
@@ -254,7 +262,8 @@ export default function ReviewPage() {
           <div className="rounded-2xl bg-card p-6 shadow-md">
             <p className="text-sm font-medium text-foreground">Reading your inbox…</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              This takes a minute or two. Results appear here as they&apos;re found.
+              The first scan of a busy inbox can take several minutes. Results
+              appear below as they&apos;re found — you can leave and come back.
             </p>
           </div>
         )}

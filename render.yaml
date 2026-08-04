@@ -5,9 +5,10 @@
 # A note on the plan: a Gmail scan runs as a background task for a few minutes
 # after the HTTP response has already been returned. Render's free instances
 # spin down when idle and can be stopped mid-task, which leaves a scan
-# half-finished. Free is fine for trying it out — the app recovers, since a run
-# stuck on "running" is superseded after 20 minutes — but use `starter` for
-# anything you want to rely on.
+# half-finished. Free is fine for trying it out — results are committed as
+# they're found, and an interrupted run is marked failed at the next boot or
+# once its heartbeat goes stale — but use `starter` for anything you want to
+# rely on.
 services:
   - type: web
     name: subtrack-api

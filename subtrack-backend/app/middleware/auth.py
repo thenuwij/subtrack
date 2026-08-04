@@ -43,14 +43,21 @@ def _fetch_jwks(force: bool = False) -> Optional[dict]:
         return None
 
 
-def _find_jwk(kid: str) -> Optional[dict]:
-    for jwks in (_fetch_jwks(), _fetch_jwks(force=True)):
-        if not jwks:
-            continue
-        for key in jwks.get("keys", []):
-            if key.get("kid") == kid:
-                return key
+def _search(jwks: Optional[dict], kid: str) -> Optional[dict]:
+    for key in (jwks or {}).get("keys", []):
+        if key.get("kid") == kid:
+            return key
     return None
+
+
+def _find_jwk(kid: str) -> Optional[dict]:
+    # Cache first; only force a refetch when the kid is unknown (key rotation).
+    # Building both results eagerly here used to fire the forced HTTP fetch on
+    # every single request, adding a Supabase round-trip to every API call.
+    found = _search(_fetch_jwks(), kid)
+    if found is not None:
+        return found
+    return _search(_fetch_jwks(force=True), kid)
 
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)) -> str:
