@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 # in Updates rather than Purchases).
 SEARCH_QUERY = (
     "(category:purchases OR subject:(receipt OR invoice OR payment OR "
-    "subscription OR renewal OR \"tax invoice\")) newer_than:{months}m"
+    "subscription OR renewal OR \"tax invoice\") OR trial OR \"free trial\" OR "
+    "\"trial ends\") newer_than:{months}m"
 )
 
 CURRENCY_SYMBOLS = {

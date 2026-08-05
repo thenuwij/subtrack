@@ -32,15 +32,18 @@ import {
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import {
+  confirmAgentAction,
   createAgentThread,
   deleteAgentThread,
   listAgentMessages,
   listAgentThreads,
+  rejectAgentAction,
   retryAgentMessage,
   sendAgentMessage,
   updateAgentThread,
 } from '@/lib/agent/api'
 import type {
+  AgentAction,
   AgentMessage,
   AgentStreamEvent,
   AgentThread,
@@ -52,6 +55,7 @@ import {
 } from '@/lib/agent/page-context'
 import { LogoMark } from '@/components/layout/Logo'
 import { Button } from '@/components/ui/button'
+import { AgentActionCard } from '@/components/agent/AgentActionCard'
 import {
   Dialog,
   DialogClose,
@@ -67,18 +71,18 @@ const ACTIVE_THREAD_KEY = 'subtrack:agent-active-thread'
 const suggestions = {
   dashboard: [
     'What changed in my recurring costs this month?',
-    'Which categories cost me the most?',
+    'Which free trials or renewals need my attention?',
     'What should I review to potentially save money?',
   ],
   subscriptions: [
-    'Summarise the recurring payments on this page.',
+    'Remind me 7 days before my next selected payment.',
     'Are there any possible duplicate records?',
-    'Which of these payments cost the most per month?',
+    'Help me add a recurring payment.',
   ],
   review: [
-    'Explain what this review queue is for.',
+    'Help me review the items on this page.',
     'What should I check before approving a detected payment?',
-    'How are shared recurring bills counted?',
+    'Are any of these detections free trials?',
   ],
   account: [
     'What share of my income goes to recurring payments?',
@@ -87,8 +91,8 @@ const suggestions = {
   ],
   assistant: [
     'What do my recurring payments cost each month?',
-    'What changed in my recurring costs this month?',
-    'What payments are due next?',
+    'Add a recurring payment for me.',
+    'Which reminders need my attention?',
   ],
   unknown: [
     'What do my recurring payments cost each month?',
@@ -121,6 +125,7 @@ function temporaryMessage(
     status,
     reply_to_id: null,
     error_code: null,
+    actions: [],
     created_at: now,
     updated_at: now,
   }
@@ -183,6 +188,10 @@ export function AgentWorkspace({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<AgentThread | null>(null)
+  const [actionBusy, setActionBusy] = useState<{
+    id: string
+    kind: 'confirm' | 'reject'
+  } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const skipNextMessageLoadRef = useRef<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -446,6 +455,48 @@ export function AgentWorkspace({
     }
   }
 
+  function replaceAction(updated: AgentAction) {
+    setMessages(current => current.map(message => ({
+      ...message,
+      actions: (message.actions ?? []).map(action =>
+        action.id === updated.id ? updated : action
+      ),
+    })))
+  }
+
+  async function confirmAction(action: AgentAction) {
+    if (actionBusy) return
+    setActionBusy({ id: action.id, kind: 'confirm' })
+    setLoadError('')
+    try {
+      const token = await tokenProvider()
+      const updated = await confirmAgentAction(token, action.id)
+      replaceAction(updated)
+      window.dispatchEvent(new CustomEvent('subtrack:data-changed', {
+        detail: { actionType: updated.action_type, result: updated.result },
+      }))
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Could not apply this action.')
+      if (activeThreadId) await loadMessages(activeThreadId, null, false, true)
+    } finally {
+      setActionBusy(null)
+    }
+  }
+
+  async function rejectAction(action: AgentAction) {
+    if (actionBusy) return
+    setActionBusy({ id: action.id, kind: 'reject' })
+    setLoadError('')
+    try {
+      const token = await tokenProvider()
+      replaceAction(await rejectAgentAction(token, action.id))
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Could not dismiss this action.')
+    } finally {
+      setActionBusy(null)
+    }
+  }
+
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -704,6 +755,15 @@ export function AgentWorkspace({
                     </ReactMarkdown>
                   </div>
                 ) : null}
+                {(message.actions ?? []).map(action => (
+                  <AgentActionCard
+                    key={action.id}
+                    action={action}
+                    busy={actionBusy?.id === action.id ? actionBusy.kind : null}
+                    onConfirm={confirmAction}
+                    onReject={rejectAction}
+                  />
+                ))}
                 {message.status === 'streaming' ? (
                   <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                     <LoaderCircle className="h-3.5 w-3.5 animate-spin" />

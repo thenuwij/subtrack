@@ -13,7 +13,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 
-from app.agent.tools import TOOL_DEFINITIONS  # noqa: E402
+from app.agent.tools import READ_TOOL_DEFINITIONS, TOOL_DEFINITIONS  # noqa: E402
 from app.database import Base  # noqa: E402
 from app.models import AgentMessage, AgentThread  # noqa: E402
 from app.routers.agent import (  # noqa: E402
@@ -39,9 +39,9 @@ class AgentFoundationTests(unittest.TestCase):
     def tearDown(self):
         self.engine.dispose()
 
-    def test_agent_tools_remain_read_only(self):
-        names = {tool["name"] for tool in TOOL_DEFINITIONS}
-        self.assertEqual(names, {
+    def test_read_tools_remain_read_only_and_actions_are_only_proposals(self):
+        read_names = {tool["name"] for tool in READ_TOOL_DEFINITIONS}
+        self.assertEqual(read_names, {
             "get_financial_overview",
             "list_recurring_payments",
             "get_recurring_payment",
@@ -52,10 +52,20 @@ class AgentFoundationTests(unittest.TestCase):
             "get_saving_candidates",
             "list_payment_reminders",
         })
-        for name in names:
+        for name in read_names:
             self.assertNotIn(name.split("_", 1)[0], {
                 "add", "create", "update", "delete", "remove", "merge", "cancel", "remind",
             })
+        action_names = {
+            tool["name"] for tool in TOOL_DEFINITIONS
+            if tool["name"] not in read_names
+        }
+        self.assertTrue(action_names)
+        self.assertTrue(all(name.startswith("propose_") for name in action_names))
+        self.assertTrue(all(
+            tool["input_schema"].get("additionalProperties") is False
+            for tool in TOOL_DEFINITIONS
+        ))
 
     def test_page_context_is_allow_listed_and_bounded(self):
         context = AgentPageContext.model_validate({

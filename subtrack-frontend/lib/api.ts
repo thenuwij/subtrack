@@ -62,13 +62,10 @@ export async function getSubscriptions(token: string) {
 }
 
 export async function createSubscription(token: string, data: SubscriptionInput) {
-  const res = await fetch(`${API_URL}/subscriptions/`, {
+  return request('/subscriptions/', token, {
     method: 'POST',
-    headers: await getHeaders(token),
     body: JSON.stringify(data),
   })
-  if (!res.ok) throw new Error('Failed to create recurring payment')
-  return res.json()
 }
 
 export async function deleteSubscription(token: string, id: string) {
@@ -148,13 +145,10 @@ export async function approveDetected(
     replace_subscription_id?: string
   } = {}
 ) {
-  const res = await fetch(`${API_URL}/detected/${id}/approve`, {
+  return request(`/detected/${id}/approve`, token, {
     method: 'POST',
-    headers: await getHeaders(token),
     body: JSON.stringify(overrides),
   })
-  if (!res.ok) throw new Error('Failed to approve')
-  return res.json()
 }
 
 export async function dismissDetected(token: string, id: string) {
@@ -217,13 +211,10 @@ export async function updatePreferences(
 }
 
 export async function updateSubscription(token: string, id: string, data: Partial<SubscriptionInput>) {
-  const res = await fetch(`${API_URL}/subscriptions/${id}`, {
+  return request(`/subscriptions/${id}`, token, {
     method: 'PATCH',
-    headers: await getHeaders(token),
     body: JSON.stringify(data),
   })
-  if (!res.ok) throw new Error('Failed to update recurring payment')
-  return res.json()
 }
 
 // In-app reminders

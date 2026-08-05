@@ -27,6 +27,7 @@ from app.routers.rates import get_cached_rate_snapshot
 from app.routers.subscriptions import monthly_equivalent
 from app.services.schedules import project_next_occurrence
 from app.services.reminders import list_user_reminders
+from app.services.trials import active_trial
 
 
 SCOPE_NOTE = (
@@ -136,6 +137,9 @@ def _payment_payload(sub: Subscription, currency: CurrencyContext) -> tuple[dict
         "base_currency": currency.base,
         "conversion_quality": quality,
         "next_due": sub.next_due.isoformat() if sub.next_due else None,
+        "trial_ends_at": sub.trial_ends_at.isoformat() if sub.trial_ends_at else None,
+        "is_active_trial": active_trial(sub),
+        "amount_meaning": "price_after_trial" if active_trial(sub) else "current_recurring_price",
         "is_shared": sub.split_mode != "full",
         "user_share": _money(sub.amount),
         "full_bill": _money(sub.full_amount),
@@ -144,6 +148,8 @@ def _payment_payload(sub: Subscription, currency: CurrencyContext) -> tuple[dict
 
 def financial_overview(db: Session, user_id: str) -> dict:
     subs = _active_subscriptions(db, user_id)
+    trial_subs = [sub for sub in subs if active_trial(sub)]
+    paid_subs = [sub for sub in subs if not active_trial(sub)]
     currency = CurrencyContext.for_user(db, user_id)
     qualities: list[str] = []
     total = 0.0
@@ -151,7 +157,7 @@ def financial_overview(db: Session, user_id: str) -> dict:
     categories: dict[str, float] = {}
     unconverted: list[dict] = []
 
-    for sub in subs:
+    for sub in paid_subs:
         base_amount, quality = currency.convert(
             sub.amount,
             sub.currency,
@@ -185,7 +191,20 @@ def financial_overview(db: Session, user_id: str) -> dict:
     ]
     return {
         "scope": SCOPE_NOTE,
-        "active_payment_count": len(subs),
+        "tracked_payment_count": len(subs),
+        "active_payment_count": len(paid_subs),
+        "active_trial_count": len(trial_subs),
+        "active_trials": [
+            {
+                "id": str(sub.id),
+                "name": sub.name,
+                "trial_ends_at": sub.trial_ends_at.isoformat(),
+                "price_after_trial": _money(sub.amount),
+                "currency": sub.currency,
+                "cycle": _enum_value(sub.cycle),
+            }
+            for sub in sorted(trial_subs, key=lambda item: item.trial_ends_at)
+        ],
         "included_in_aggregate_count": converted_count,
         "monthly_recurring_total": _money(total),
         "yearly_recurring_total": _money(total * 12),
@@ -287,6 +306,7 @@ def upcoming_charges(
             "due_at": due.isoformat(),
             "days_until_due": max(0, (due.date() - now.date()).days),
             "due_date_source": source,
+            "charge_kind": "trial_conversion" if active_trial(sub, now) else "renewal",
         })
     rows.sort(key=lambda row: (row["due_at"], row["name"].casefold()))
     return {
@@ -432,6 +452,9 @@ def review_detections(db: Session, user_id: str, tool_input: dict) -> dict:
                 "category": _enum_value(row.category),
                 "confidence": row.confidence,
                 "charge_count": row.charge_count,
+                "trial_ends_at": row.trial_ends_at.isoformat()
+                    if row.trial_ends_at else None,
+                "is_trial": row.trial_ends_at is not None,
                 "cancelled": row.cancelled,
                 "is_price_change": row.existing_subscription_id is not None,
                 "matches_existing_payment": row.existing_subscription_id is not None,

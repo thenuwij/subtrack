@@ -27,6 +27,7 @@ from app.models import (
     GmailAccount,
     Subscription,
 )
+from app.services.schedules import utc_naive
 
 logger = logging.getLogger(__name__)
 
@@ -329,13 +330,36 @@ def _apply_detections(db, user_id, subscriptions, existing_detections, detected)
         # Dismissed means "stop suggesting this" — a rescan must not nag.
         # Approved means it already became a subscription; changes to it are
         # handled through the tracked-subscription branch below.
+        trial_changed = bool(
+            tracked
+            and (
+                (
+                    found.trial_ends_at
+                    and (
+                        tracked.trial_ends_at is None
+                        or utc_naive(tracked.trial_ends_at)
+                        != utc_naive(found.trial_ends_at)
+                    )
+                )
+                # Once Gmail has evidence of a successful charge, an existing
+                # free trial has converted even if the price stayed exactly the
+                # same as the post-trial price we already stored.  Surface that
+                # transition for review so approval can clear the stale trial
+                # badge and automatic cancellation reminder.
+                or (
+                    tracked.trial_ends_at is not None
+                    and found.trial_ends_at is None
+                    and found.charge_count > 0
+                )
+            )
+        )
         if previous is not None and previous.status != DetectionStatus.pending:
-            if tracked is None or _same_price(tracked, found):
+            if tracked is None or (_same_price(tracked, found) and not trial_changed):
                 continue
 
         existing_sub_id = None
         if tracked is not None:
-            if _same_price(tracked, found) and tracked.is_active:
+            if _same_price(tracked, found) and tracked.is_active and not trial_changed:
                 continue   # already tracked at this price — nothing to review
             existing_sub_id = tracked.id
 
@@ -357,6 +381,7 @@ def _apply_detections(db, user_id, subscriptions, existing_detections, detected)
         row.cancelled = found.cancelled
         row.confidence = found.confidence
         row.charge_count = found.charge_count
+        row.trial_ends_at = utc_naive(found.trial_ends_at) if found.trial_ends_at else None
         row.existing_subscription_id = existing_sub_id
         row.status = DetectionStatus.pending
         row.resolved_at = None

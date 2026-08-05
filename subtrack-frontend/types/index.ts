@@ -26,6 +26,7 @@ export interface Subscription {
   converted_amount: number | null  // null for legacy entries
   cycle: BillingCycle
   next_due: string | null
+  trial_ends_at: string | null       // post-trial price is stored in `amount`
   is_active: boolean
   created_at: string
 }
@@ -40,6 +41,7 @@ export interface SubscriptionInput {
   converted_amount?: number | null
   cycle: BillingCycle
   next_due?: string | null
+  trial_ends_at?: string | null
   is_active?: boolean
   full_amount?: number | null
   share_ratio?: number
@@ -67,6 +69,7 @@ export interface DetectedSubscription {
   cancelled: boolean
   confidence: 'high' | 'medium'
   charge_count: number
+  trial_ends_at: string | null
   existing_subscription_id: string | null
   product_key: string
   current_amount: number | null                       // what you pay today, if tracked

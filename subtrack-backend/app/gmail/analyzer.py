@@ -16,6 +16,7 @@ are visible side by side.
 """
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from typing import Callable, Literal
 
 import anthropic
@@ -76,7 +77,12 @@ class DetectedSubscription(BaseModel):
                     "Ignore duplicate emails about the same bill (an invoice plus a "
                     "payment confirmation days apart is ONE charge, not two)."
     )
-    amount: float = Field(description="The current per-cycle amount, from the most recent successful charge")
+    amount: float = Field(
+        ge=0,
+        description="The current per-cycle amount from the latest charge, or the "
+                    "price that will be charged after a free trial. Use 0 only "
+                    "when this is clearly a free trial but the future price is absent."
+    )
     currency: str = Field(description="ISO currency code, e.g. AUD")
     previous_amount: float | None = Field(
         default=None,
@@ -101,6 +107,11 @@ class DetectedSubscription(BaseModel):
                     "medium = plausible but thin evidence (e.g. only 1-2 charges)."
     )
     charge_count: int = Field(description="Number of distinct successful charges observed (not emails)")
+    trial_ends_at: datetime | None = Field(
+        default=None,
+        description="The explicit free-trial end date in ISO 8601 form, or null "
+                    "when this is not a current free trial. Do not guess a date."
+    )
 
 
 class AnalysisResult(BaseModel):
@@ -111,7 +122,7 @@ class AnalysisResult(BaseModel):
 
 
 SYSTEM = """You analyze email timelines from a person's inbox to find their paid \
-recurring subscriptions and bills — streaming, software, utilities, insurance, \
+recurring subscriptions, auto-renewing free trials, and bills — streaming, software, utilities, insurance, \
 rent, gym, phone plans.
 
 You are shown emails grouped by sender. For each sender you see every matched \
@@ -145,6 +156,12 @@ repeated discrete purchases (retail, food delivery), which are not subscriptions
 Report it only if the email text clearly indicates a subscription or an ongoing \
 account bill (e.g. "your subscription renewal", a utility invoice), with \
 confidence=medium.
+- A free trial that will automatically become paid is a recurring commitment even \
+before its first charge. Include it when the email explicitly identifies the trial \
+and its end date. Set trial_ends_at to that explicit date, charge_count=0 when \
+nothing has been charged yet, and amount to the stated post-trial recurring price. \
+If the price is not present, use amount=0 so the review screen can ask the user. \
+Do not call a permanently free plan or a trial without auto-renewal a subscription.
 - Prefer missing a borderline case over inventing one. The user reviews and \
 approves everything you report.
 - Each email includes an excerpt of its body. Use it to name the product: a \
@@ -203,8 +220,14 @@ def _analyze_chunk(
         if sub.sender_domain not in chunk:
             logger.warning("Dropping result for unknown domain %r", sub.sender_domain)
             continue
-        # A bill with no amount can't be tracked as a cost.
-        if sub.amount is None or sub.amount <= 0:
+        if (
+            sub.trial_ends_at
+            and sub.trial_ends_at.date() < datetime.now(timezone.utc).date()
+        ):
+            sub.trial_ends_at = None
+        # Paid bills need an amount. A clear trial can stay at zero until the
+        # review screen asks the user for its post-trial price.
+        if (sub.amount is None or sub.amount <= 0) and sub.trial_ends_at is None:
             logger.info("Dropping %r — no usable amount", sub.merchant)
             continue
         results.append(sub)
@@ -282,6 +305,8 @@ def _dedupe(subs: list[DetectedSubscription]) -> list[DetectedSubscription]:
         winner, loser = (sub, current) if sub.charge_count > current.charge_count else (current, sub)
         if winner.previous_amount is None and abs(loser.amount - winner.amount) > 0.01:
             winner.previous_amount = loser.amount
+        if winner.trial_ends_at is None and loser.trial_ends_at is not None:
+            winner.trial_ends_at = loser.trial_ends_at
         winner.charge_count = max(winner.charge_count, loser.charge_count)
         best[key] = winner
 

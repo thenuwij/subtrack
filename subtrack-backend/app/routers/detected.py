@@ -11,7 +11,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -24,9 +24,12 @@ from app.models import (
     DetectionStatus,
     Subscription,
     PaymentReminder,
+    UserPreference,
 )
 from app.routers.subscriptions import (log_change, monthly_equivalent, rebill,
                                        resolve_split)
+from app.services.schedules import utc_naive
+from app.services.trials import sync_trial_reminder, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,7 @@ def _serialize(d: DetectedSubscription, tracked: Optional[Subscription] = None,
         "cancelled": d.cancelled,
         "confidence": d.confidence,
         "charge_count": d.charge_count,
+        "trial_ends_at": d.trial_ends_at.isoformat() if d.trial_ends_at else None,
         "existing_subscription_id": str(d.existing_subscription_id)
             if d.existing_subscription_id else None,
         # A subscription that looks like the same service under another name.
@@ -100,7 +104,10 @@ def list_detections(
     wanted = {d.existing_subscription_id for d in pending if d.existing_subscription_id}
     wanted |= {d.similar_subscription_id for d in pending if d.similar_subscription_id}
     subs = {
-        s.id: s for s in db.query(Subscription).filter(Subscription.id.in_(wanted)).all()
+        s.id: s for s in db.query(Subscription).filter(
+            Subscription.user_id == user_id,
+            Subscription.id.in_(wanted),
+        ).all()
     } if wanted else {}
 
     return [
@@ -111,10 +118,13 @@ def list_detections(
 
 class ApproveOverrides(BaseModel):
     """The user can correct the detection before it becomes real."""
+    model_config = ConfigDict(extra="forbid")
+
     name: Optional[str] = None
     category: Optional[Category] = None
-    amount: Optional[float] = None
+    amount: Optional[float] = Field(default=None, gt=0)
     cycle: Optional[BillingCycle] = None
+    trial_ends_at: Optional[datetime] = None
     # Shared bills: the receipt is the whole cost, but the user may only pay a
     # portion of it (rent split three ways, a household energy bill). Storing
     # the ratio rather than a corrected amount keeps future scans from reading
@@ -144,7 +154,19 @@ def approve(
     # The receipt is the full bill. If the user only pays part of it, `amount`
     # becomes their share and the full cost is kept for future scan comparisons.
     billed = overrides.amount if overrides.amount is not None else detection.amount
+    if billed <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail="Enter the recurring price that will be charged after this trial",
+        )
     split = resolve_split(billed, overrides.share_ratio, overrides.share_amount)
+    trial_supplied = detection.trial_ends_at is not None \
+        or "trial_ends_at" in overrides.model_fields_set
+    trial_end = overrides.trial_ends_at \
+        if "trial_ends_at" in overrides.model_fields_set else detection.trial_ends_at
+    trial_end = utc_naive(trial_end) if trial_end else None
+    if trial_end and trial_end.date() < utcnow().date():
+        raise HTTPException(status_code=422, detail="The trial end date has already passed")
 
     # Either an automatic price-change match, or the subscription the user chose
     # to replace when told this looks like a service they already track.
@@ -178,6 +200,18 @@ def approve(
         sub.category = category
         sub.cycle = cycle
         sub.currency = detection.currency
+        preference = db.query(UserPreference).filter(
+            UserPreference.user_id == user_id,
+        ).first()
+        base = preference.base_currency if preference else "AUD"
+        # Do not carry a stale conversion from the former amount/currency.
+        # Foreign-currency totals can use the rate service; same-currency
+        # amounts are exact immediately.
+        sub.converted_amount = sub.amount if sub.currency == base else None
+        if trial_supplied:
+            sub.trial_ends_at = trial_end
+            if trial_end:
+                sub.next_due = trial_end
         # Bind the subscription to its source so later scans recognise it even
         # if the analyzer words the merchant differently.
         sub.source_domain = detection.sender_domain
@@ -188,10 +222,22 @@ def approve(
                 PaymentReminder.user_id == user_id,
                 PaymentReminder.subscription_id == sub.id,
             ).update({PaymentReminder.is_active: False}, synchronize_session=False)
+        elif trial_supplied:
+            sync_trial_reminder(db, sub)
+        elif sub.trial_ends_at and detection.charge_count > 0:
+            # A later successful charge is evidence that the trial converted.
+            # Clear its automatic cancellation reminder instead of leaving an
+            # already-paid trial permanently overdue on the dashboard.
+            sub.trial_ends_at = None
+            sync_trial_reminder(db, sub)
         after = monthly_equivalent(sub.amount, sub.cycle)
         if after != before:
             log_change(db, sub, ChangeKind.price_change, before, after)
     else:
+        preference = db.query(UserPreference).filter(
+            UserPreference.user_id == user_id,
+        ).first()
+        base = preference.base_currency if preference else "AUD"
         sub = Subscription(
             user_id=user_id,
             name=name,
@@ -204,17 +250,21 @@ def approve(
             source_key=detection.product_key or None,
             currency=detection.currency,
             exchange_rate=1.0,
-            converted_amount=split.amount,
+            converted_amount=split.amount if detection.currency == base else None,
             cycle=cycle,
+            next_due=trial_end,
+            trial_ends_at=trial_end,
             is_active=not detection.cancelled,
         )
         db.add(sub)
         db.flush()
+        if trial_end and sub.is_active:
+            sync_trial_reminder(db, sub)
         log_change(db, sub, ChangeKind.added, None,
                    monthly_equivalent(split.amount, cycle))
 
     detection.status = DetectionStatus.approved
-    detection.resolved_at = datetime.utcnow()
+    detection.resolved_at = utcnow()
     db.commit()
 
     logger.info("Detection approved", extra={"user_id": user_id})

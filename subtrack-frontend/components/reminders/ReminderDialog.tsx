@@ -126,7 +126,10 @@ export function ReminderDialog({
         kind,
         days_before: parsedDays,
         ...(kind === 'trial_end'
-          ? { target_date: new Date(`${targetDate}T00:00:00`).toISOString() }
+          // Treat a date-only deadline as a calendar date. Noon UTC avoids the
+          // common local-midnight conversion that silently stores the previous
+          // day for users east of Greenwich.
+          ? { target_date: new Date(`${targetDate}T12:00:00Z`).toISOString() }
           : {}),
         ...(note.trim() ? { note: note.trim() } : {}),
       })
@@ -253,7 +256,16 @@ export function ReminderDialog({
         <div className="grid gap-4 rounded-xl bg-muted/40 p-4">
           <div className="grid gap-1.5">
             <Label>Reminder type</Label>
-            <Select value={kind} onValueChange={value => setKind(value as ReminderKind)}>
+            <Select
+              value={kind}
+              onValueChange={value => {
+                const nextKind = value as ReminderKind
+                setKind(nextKind)
+                if (nextKind === 'trial_end' && subscription.trial_ends_at) {
+                  setTargetDate(dateInputValue(subscription.trial_ends_at))
+                }
+              }}
+            >
               <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {(Object.entries(KIND_LABEL) as [ReminderKind, string][]).map(([value, label]) => (

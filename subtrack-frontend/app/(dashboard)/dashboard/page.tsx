@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowDownRight,
@@ -36,6 +36,7 @@ import { Button } from '@/components/ui/button'
 import { ReminderCenter } from '@/components/reminders/ReminderCenter'
 import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
 import { toast } from 'sonner'
+import { isActiveTrial } from '@/lib/utils/trials'
 
 // 52 weeks / 12 months. Using 4.33 loses ~0.04 of a week each month, which
 // compounds to a visibly short annual figure on a large weekly bill like rent.
@@ -63,40 +64,43 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const { baseCurrency, convertAmount } = useCurrency()
 
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        const supabase = createClient()
-        const { data: { session } } = await supabase.auth.getSession()
-        if (!session) return
+  const fetchData = useCallback(async () => {
+    try {
+      const supabase = createClient()
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
 
-        const token = session.access_token
-        const [subs, chgs, prefs, gmailStatus, reminderResult] = await Promise.all([
-          getSubscriptions(token),
-          getSubscriptionChanges(token, 30),
-          getPreferences(token),
-          getGmailStatus(token).catch(() => null),
-          getReminders(token, { horizonDays: 90 })
-            .then(rows => ({ rows, error: '' }))
-            .catch(error => ({
-              rows: [],
-              error: error instanceof Error ? error.message : 'Could not load reminders.',
-            })),
-        ])
+      const token = session.access_token
+      const [subs, chgs, prefs, gmailStatus, reminderResult] = await Promise.all([
+        getSubscriptions(token),
+        getSubscriptionChanges(token, 30),
+        getPreferences(token),
+        getGmailStatus(token).catch(() => null),
+        getReminders(token, { horizonDays: 90 })
+          .then(rows => ({ rows, error: '' }))
+          .catch(error => ({
+            rows: [],
+            error: error instanceof Error ? error.message : 'Could not load reminders.',
+          })),
+      ])
 
-        setSubscriptions(subs)
-        setChanges(chgs)
-        setMonthlyIncome(prefs.monthly_income ?? null)
-        setGmail(gmailStatus)
-        setReminders(reminderResult.rows)
-        setReminderError(reminderResult.error)
-      } finally {
-        setLoading(false)
-      }
+      setSubscriptions(subs)
+      setChanges(chgs)
+      setMonthlyIncome(prefs.monthly_income ?? null)
+      setGmail(gmailStatus)
+      setReminders(reminderResult.rows)
+      setReminderError(reminderResult.error)
+    } finally {
+      setLoading(false)
     }
-
-    fetchData()
   }, [])
+
+  useEffect(() => {
+    void fetchData()
+    const refresh = () => { void fetchData() }
+    window.addEventListener('subtrack:data-changed', refresh)
+    return () => window.removeEventListener('subtrack:data-changed', refresh)
+  }, [fetchData])
 
   useRegisterAgentPageContext({
     visible_subscription_ids: subscriptions.slice(0, 25).map(subscription => subscription.id),
@@ -107,12 +111,18 @@ export default function DashboardPage() {
   // numbers on this page are actually comparable to each other.
   const ranked = useMemo(() => {
     return subscriptions
+      .filter(subscription => !isActiveTrial(subscription))
       .map((s) => ({
         subscription: s,
         monthly: convertAmount(toMonthly(s.amount, s.cycle), s.currency),
       }))
       .sort((a, b) => b.monthly - a.monthly)
   }, [subscriptions, convertAmount])
+
+  const activeTrials = useMemo(
+    () => subscriptions.filter(subscription => isActiveTrial(subscription)),
+    [subscriptions]
+  )
 
   const monthlyTotal = useMemo(
     () => ranked.reduce((sum, r) => sum + r.monthly, 0),
@@ -253,7 +263,10 @@ export default function DashboardPage() {
               {formatCurrency(monthlyTotal * 12, baseCurrency)} a year
             </span>
             <span className="tabular-nums">
-              {subscriptions.length} active payment{subscriptions.length === 1 ? '' : 's'}
+              {ranked.length} paid payment{ranked.length === 1 ? '' : 's'}
+              {activeTrials.length > 0
+                ? ` · ${activeTrials.length} free trial${activeTrials.length === 1 ? '' : 's'}`
+                : ''}
             </span>
             {shareOfIncome !== null ? (
               // Stated plainly. Colouring this red would be scolding someone

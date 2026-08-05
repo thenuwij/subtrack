@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ArrowUpRight, Check, Mail, RotateCcw, X } from 'lucide-react'
+import { ArrowUpRight, Check, Clock3, Mail, RotateCcw, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import {
   approveDetected,
@@ -46,26 +46,32 @@ export default function ReviewPage() {
   const [tab, setTab] = useState<'pending' | 'dismissed'>('pending')
   const [shares, setShares] = useState<Record<string, number>>({})
   const [custom, setCustom] = useState<Record<string, string>>({})
+  const [trialPrices, setTrialPrices] = useState<Record<string, string>>({})
 
   useRegisterAgentPageContext({
     visible_detection_ids: items.slice(0, 25).map(item => item.id),
     filters: { review_status: tab },
   })
 
-  async function load() {
+  const load = useCallback(async () => {
     const t = await token()
     if (!t) return
     const [detected, status] = await Promise.all([getDetected(t, tab), getGmailStatus(t)])
     setItems(detected)
     setGmail(status)
     return status as GmailStatus
-  }
+  }, [tab])
 
   useEffect(() => {
     setLoading(true)
-    load().finally(() => setLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab])
+    void load().finally(() => setLoading(false))
+  }, [load])
+
+  useEffect(() => {
+    const refresh = () => { void load() }
+    window.addEventListener('subtrack:data-changed', refresh)
+    return () => window.removeEventListener('subtrack:data-changed', refresh)
+  }, [load])
 
   // Per-detection share of the bill. A receipt shows the whole cost, but the
   // user may only pay part of it (rent split with housemates, a shared energy
@@ -98,12 +104,9 @@ export default function ReviewPage() {
   // While a scan runs there's nothing to show until it finishes, so poll for it.
   useEffect(() => {
     if (gmail?.scan_status !== 'running') return
-    const timer = setInterval(() => { load() }, 4000)
+    const timer = setInterval(() => { void load() }, 4000)
     return () => clearInterval(timer)
-    // `load` is redefined every render; depending on it would restart the
-    // interval constantly. The scan status is the only real trigger.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gmail?.scan_status])
+  }, [gmail?.scan_status, load])
 
   async function restore(id: string) {
     const t = await token()
@@ -128,6 +131,12 @@ export default function ReviewPage() {
     setBusy(id)
     try {
       const item = items.find(i => i.id === id)
+      const enteredTrialPrice = parseFloat(trialPrices[id] ?? '')
+      if (item?.trial_ends_at && item.amount <= 0
+          && (!Number.isFinite(enteredTrialPrice) || enteredTrialPrice <= 0)) {
+        toast.error('Enter the price that will be charged after the trial.')
+        return
+      }
       const fixed = item ? fixedShare(id, item.amount) : null
       const ratio = shares[id]
       await approveDetected(t, id, {
@@ -137,6 +146,9 @@ export default function ReviewPage() {
             ? { share_ratio: ratio }
             : {}),
         ...(replaceId ? { replace_subscription_id: replaceId } : {}),
+        ...(item?.trial_ends_at && item.amount <= 0
+          ? { amount: enteredTrialPrice }
+          : {}),
       })
       setItems(prev => prev.filter(i => i.id !== id))
       setChoosing(null)
@@ -301,6 +313,7 @@ export default function ReviewPage() {
               const isPriceChange = item.existing_subscription_id !== null
               const rose =
                 item.previous_amount !== null && item.amount > item.previous_amount
+              const isTrial = item.trial_ends_at !== null
 
               return (
                 <div
@@ -317,6 +330,12 @@ export default function ReviewPage() {
                             Price change
                           </span>
                         )}
+                        {isTrial && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                            <Clock3 className="h-3 w-3" />
+                            Free trial
+                          </span>
+                        )}
                         {item.cancelled && (
                           <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                             Cancelled
@@ -329,6 +348,27 @@ export default function ReviewPage() {
                         )}
                       </div>
 
+                      {isTrial && item.amount <= 0 ? (
+                        <div className="max-w-xs space-y-1.5">
+                          <label htmlFor={`trial-price-${item.id}`} className="text-xs font-medium text-foreground">
+                            Price after trial ({item.currency})
+                          </label>
+                          <input
+                            id={`trial-price-${item.id}`}
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            inputMode="decimal"
+                            value={trialPrices[item.id] ?? ''}
+                            onChange={event => setTrialPrices(current => ({
+                              ...current,
+                              [item.id]: event.target.value,
+                            }))}
+                            placeholder="Required before approval"
+                            className="w-full rounded-md border border-border bg-background px-2.5 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                          />
+                        </div>
+                      ) : (
                       <p className="text-sm text-muted-foreground">
                         {isShared ? (
                           <>
@@ -350,13 +390,28 @@ export default function ReviewPage() {
                         {' · '}
                         {formatCurrency(monthly * 12, item.currency)}/yr
                       </p>
+                      )}
+
+                      {isTrial ? (
+                        <p className="text-xs text-muted-foreground">
+                          Trial ends{' '}
+                          <span className="font-medium text-foreground">
+                            {new Intl.DateTimeFormat('en-AU', {
+                              day: 'numeric', month: 'short', year: 'numeric',
+                            }).format(new Date(item.trial_ends_at!))}
+                          </span>
+                          . Approving saves this as the first charge date and creates a dashboard reminder 7 days before.
+                        </p>
+                      ) : null}
 
                       {/* The evidence. You're being asked to trust a guess, so
                           show what it's based on. */}
                       <p className="text-xs text-muted-foreground">
                         {item.charge_count > 0
                           ? `${item.charge_count} charge${item.charge_count === 1 ? '' : 's'} found`
-                          : 'No charges found — detected from cancellation notice'}
+                          : isTrial
+                            ? 'No charge yet — detected from a trial email'
+                            : 'No charges found — detected from cancellation notice'}
                         {' · '}
                         <span>{formatCategory(item.category)}</span>
                         {' · via '}
@@ -463,7 +518,7 @@ export default function ReviewPage() {
                       {/* Receipts show the whole bill. Shared costs — rent,
                           household utilities — need only the user's portion. */}
                       <div className={`flex-wrap items-center gap-1.5 pt-1 ${
-                        tab === 'dismissed' ? 'hidden' : 'flex'
+                        tab === 'dismissed' || item.amount <= 0 ? 'hidden' : 'flex'
                       }`}>
                         <span className="mr-1 text-xs text-muted-foreground">
                           I pay

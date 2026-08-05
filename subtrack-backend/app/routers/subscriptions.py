@@ -1,15 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import NamedTuple, Optional
 from datetime import datetime
 from uuid import UUID
 from app.database import get_db
 from app.models import (
     Subscription, BillingCycle, Category, SubscriptionChange, ChangeKind,
-    PaymentReminder,
+    DetectedSubscription, PaymentReminder,
 )
 from app.middleware.auth import verify_token
+from app.services.schedules import utc_naive
+from app.services.trials import sync_trial_reminder, utcnow
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 
@@ -38,6 +40,41 @@ def log_change(db: Session, sub: Subscription, kind: ChangeKind,
         new_monthly=new_monthly,
         currency=sub.currency,
     ))
+
+
+def retarget_detection_links(
+    db: Session,
+    user_id: str,
+    source_id: UUID,
+    target_id: UUID | None,
+) -> None:
+    """Keep pending Gmail review rows valid when a tracked row changes identity.
+
+    Detection links are intentionally not database foreign keys because a
+    review finding survives changes to the tracked list.  That means every
+    delete/merge path must repair the optional links explicitly.
+    """
+    rows = db.query(DetectedSubscription).filter(
+        DetectedSubscription.user_id == user_id,
+        (
+            (DetectedSubscription.existing_subscription_id == source_id)
+            | (DetectedSubscription.similar_subscription_id == source_id)
+        ),
+    ).all()
+    for row in rows:
+        if row.existing_subscription_id == source_id:
+            row.existing_subscription_id = target_id
+        if row.similar_subscription_id == source_id:
+            row.similar_subscription_id = target_id
+        # A merge can collapse two different hints onto the same target.  The
+        # exact tracked match wins; retaining the same row as a second
+        # "possible duplicate" would force a meaningless choice in Review.
+        if (
+            row.existing_subscription_id is not None
+            and row.similar_subscription_id == row.existing_subscription_id
+        ):
+            row.similar_subscription_id = None
+            row.similar_reason = None
 
 class Split(NamedTuple):
     amount: float                  # what this user pays — stored as `amount`
@@ -75,14 +112,18 @@ def rebill(sub: Subscription, new_billed: float) -> Split:
 
 
 class SubscriptionCreate(BaseModel):
-    name: str
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=160)
     category: Category
-    amount: float
-    currency: str = "AUD"
-    exchange_rate: float = 1.0
+    amount: float = Field(gt=0)
+    currency: str = Field(default="AUD", min_length=3, max_length=3)
+    exchange_rate: float = Field(default=1.0, gt=0)
     converted_amount: Optional[float] = None
     cycle: BillingCycle
     next_due: Optional[datetime] = None
+    trial_ends_at: Optional[datetime] = None
+    is_active: bool = True
     # Shared bills: send the full cost and the caller's portion (e.g. 1/3).
     # `amount` is then derived and represents only what this user pays.
     full_amount: Optional[float] = None
@@ -90,14 +131,17 @@ class SubscriptionCreate(BaseModel):
     share_amount: Optional[float] = Field(default=None, gt=0)
 
 class SubscriptionUpdate(BaseModel):
-    name: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=160)
     category: Optional[Category] = None
-    amount: Optional[float] = None
-    currency: Optional[str] = None
-    exchange_rate: Optional[float] = None
+    amount: Optional[float] = Field(default=None, gt=0)
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    exchange_rate: Optional[float] = Field(default=None, gt=0)
     converted_amount: Optional[float] = None
     cycle: Optional[BillingCycle] = None
     next_due: Optional[datetime] = None
+    trial_ends_at: Optional[datetime] = None
     is_active: Optional[bool] = None
     full_amount: Optional[float] = None
     share_ratio: Optional[float] = Field(default=None, gt=0, le=1)
@@ -149,6 +193,11 @@ def create_subscription(
     db: Session = Depends(get_db)
 ):
     fields = data.model_dump()
+    trial_end = fields.get("trial_ends_at")
+    if trial_end and utc_naive(trial_end).date() < utcnow().date():
+        raise HTTPException(status_code=422, detail="The trial end date has already passed")
+    if trial_end and fields.get("next_due") is None:
+        fields["next_due"] = trial_end
     # The caller sends the whole bill plus how it's split; `amount` ends up as
     # this user's portion so every downstream total needs no special case.
     billed = fields.pop("full_amount") or fields["amount"]
@@ -163,6 +212,8 @@ def create_subscription(
                        split_mode=split.split_mode)
     db.add(sub)
     db.flush()   # need sub.id before logging the change
+    if sub.trial_ends_at and sub.is_active:
+        sync_trial_reminder(db, sub)
     log_change(db, sub, ChangeKind.added, None, monthly_equivalent(sub.amount, sub.cycle))
     db.commit()
     db.refresh(sub)
@@ -184,7 +235,15 @@ def update_subscription(
 
     before = monthly_equivalent(sub.amount, sub.cycle)
 
-    fields = data.model_dump(exclude_none=True)
+    supplied = data.model_dump(exclude_unset=True)
+    trial_changed = "trial_ends_at" in supplied
+    trial_end = supplied.pop("trial_ends_at", None)
+    if trial_end and utc_naive(trial_end).date() < utcnow().date():
+        raise HTTPException(status_code=422, detail="The trial end date has already passed")
+    # Existing update semantics intentionally ignore null for ordinary fields;
+    # trial metadata is the exception because unchecking "free trial" must be
+    # able to clear the saved date.
+    fields = {key: value for key, value in supplied.items() if value is not None}
     # A split can be edited independently of the amount, so resolve against
     # whatever the caller didn't send.
     if {"full_amount", "share_ratio", "share_amount"} & fields.keys():
@@ -199,6 +258,12 @@ def update_subscription(
 
     for key, value in fields.items():
         setattr(sub, key, value)
+
+    if trial_changed:
+        sub.trial_ends_at = trial_end
+        if trial_end and "next_due" not in supplied:
+            sub.next_due = trial_end
+        sync_trial_reminder(db, sub)
 
     if fields.get("is_active") is False:
         db.query(PaymentReminder).filter(
@@ -305,6 +370,7 @@ def merge_subscription(
             if reminder.is_active:
                 existing_keys.add(key)
 
+    retarget_detection_links(db, user_id, source.id, target.id)
     db.delete(source)
     db.commit()
     db.refresh(target)
@@ -328,6 +394,7 @@ def delete_subscription(
         PaymentReminder.user_id == user_id,
         PaymentReminder.subscription_id == sub.id,
     ).delete(synchronize_session=False)
+    retarget_detection_links(db, user_id, sub.id, None)
     db.delete(sub)
     db.commit()
     return {"message": "Deleted successfully"}

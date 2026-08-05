@@ -44,6 +44,29 @@ export type AgentMessageStatus =
   | 'failed'
   | 'superseded'
 
+export type AgentActionStatus =
+  | 'pending'
+  | 'completed'
+  | 'rejected'
+  | 'failed'
+  | 'expired'
+
+export interface AgentAction {
+  id: string
+  thread_id: string
+  assistant_message_id: string
+  action_type: string
+  summary: string
+  description: string
+  status: AgentActionStatus
+  result: Record<string, unknown> | null
+  error_code: string | null
+  error_message: string | null
+  expires_at: string
+  created_at: string
+  resolved_at: string | null
+}
+
 export interface AgentMessage {
   id: string
   thread_id: string
@@ -53,6 +76,7 @@ export interface AgentMessage {
   status: AgentMessageStatus
   reply_to_id: string | null
   error_code: string | null
+  actions: AgentAction[]
   page_context?: AgentPageContext | null
   created_at: string
   updated_at: string

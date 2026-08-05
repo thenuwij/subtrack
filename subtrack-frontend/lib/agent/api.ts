@@ -1,5 +1,6 @@
 import type {
   AgentMessagePage,
+  AgentAction,
   AgentPageContext,
   AgentStreamEvent,
   AgentThread,
@@ -59,6 +60,18 @@ export function updateAgentThread(
 
 export function deleteAgentThread(token: string, id: string) {
   return jsonRequest<void>(`/agent/threads/${id}`, token, { method: 'DELETE' })
+}
+
+export function confirmAgentAction(token: string, id: string) {
+  return jsonRequest<AgentAction>(`/agent/actions/${id}/confirm`, token, {
+    method: 'POST',
+  })
+}
+
+export function rejectAgentAction(token: string, id: string) {
+  return jsonRequest<AgentAction>(`/agent/actions/${id}/reject`, token, {
+    method: 'POST',
+  })
 }
 
 export function listAgentMessages(

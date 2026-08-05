@@ -1,5 +1,13 @@
-"""Anthropic tool schemas and the read-only dispatcher for Phase 2."""
+"""Anthropic schemas for user-scoped reads and inert action proposals."""
+from uuid import UUID
+
 from sqlalchemy.orm import Session
+
+from app.agent.actions import (
+    ACTION_MODELS,
+    ACTION_TOOL_DEFINITIONS,
+    create_action_proposal,
+)
 
 from app.agent.finance import (
     commitment_changes,
@@ -19,7 +27,7 @@ CATEGORIES = [
     "fitness", "food", "transport", "other",
 ]
 
-TOOL_DEFINITIONS = [
+READ_TOOL_DEFINITIONS = [
     {
         "name": "get_financial_overview",
         "description": (
@@ -155,9 +163,30 @@ TOOL_DEFINITIONS = [
     },
 ]
 
+TOOL_DEFINITIONS = READ_TOOL_DEFINITIONS + ACTION_TOOL_DEFINITIONS
 
-def run_tool(tool_name: str, tool_input: dict, db: Session, user_id: str):
-    """Dispatch an allow-listed read operation scoped to the authenticated user."""
+
+def run_tool(
+    tool_name: str,
+    tool_input: dict,
+    db: Session,
+    user_id: str,
+    *,
+    thread_id: UUID | None = None,
+    assistant_message_id: UUID | None = None,
+):
+    """Dispatch an allow-listed read or create an inert action proposal."""
+    if tool_name in ACTION_MODELS:
+        if not thread_id or not assistant_message_id:
+            return {"error": "Action proposals require a conversation message"}
+        return create_action_proposal(
+            tool_name,
+            tool_input,
+            db,
+            user_id,
+            thread_id=thread_id,
+            assistant_message_id=assistant_message_id,
+        )
     if tool_name == "get_financial_overview":
         return financial_overview(db, user_id)
     if tool_name == "list_recurring_payments":
@@ -176,4 +205,4 @@ def run_tool(tool_name: str, tool_input: dict, db: Session, user_id: str):
         return saving_candidates(db, user_id, tool_input.get("limit", 5))
     if tool_name == "list_payment_reminders":
         return reminders_overview(db, user_id, tool_input)
-    return {"error": "Unknown read-only tool"}
+    return {"error": "Unknown assistant tool"}
