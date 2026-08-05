@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useCallback, useEffect, useState, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { getSubscriptions, createSubscription, deleteSubscription, updateSubscription, getDuplicates, mergeSubscription } from '@/lib/api'
-import { DuplicatePair, Subscription, SubscriptionInput } from '@/types'
+import { Category, DuplicatePair, Subscription, SubscriptionInput } from '@/types'
 import { SubscriptionCard }       from '@/components/subscriptions/SubscriptionCard'
 import { AddSubscriptionModal }   from '@/components/subscriptions/AddSubscriptionModal'
 import { FilterBar }              from '@/components/shared/FilterBar'
@@ -14,6 +14,9 @@ import { useCurrency }            from '@/lib/context/currency'
 import { formatCurrency }         from '@/lib/utils/currency'
 import { formatCategory }         from '@/lib/utils/categories'
 import { toast } from 'sonner'
+import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
+import { ReminderDialog } from '@/components/reminders/ReminderDialog'
+import { isActiveTrial } from '@/lib/utils/trials'
 
 function monthlyEquivalent(sub: Subscription): number {
   const amount = sub.converted_amount ?? sub.amount
@@ -40,8 +43,6 @@ function inPeriod(dateStr: string | null, period: 'all' | 'day' | 'week' | 'mont
 }
 
 export default function SubscriptionsPage() {
-  const supabase = createClient()
-
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
   // Two rows for one service double-counts the cost, and detection can easily
   // produce "Claude" and "Anthropic (Claude)" separately.
@@ -51,11 +52,13 @@ export default function SubscriptionsPage() {
   const [error, setError]                 = useState<string | null>(null)
   const [modalOpen, setModalOpen]         = useState(false)
   const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null)
+  const [reminderSubscription, setReminderSubscription] = useState<Subscription | null>(null)
+  const [assistantSubscription, setAssistantSubscription] = useState<Subscription | null>(null)
   const { baseCurrency } = useCurrency()
 
   // filter / sort / group state
   const [search, setSearch]                   = useState('')
-  const [selectedCategory, setSelectedCategory] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState<Category | ''>('')
   const [period, setPeriod]                   = useState<'all' | 'day' | 'week' | 'month'>('all')
   const [fromDate, setFromDate]               = useState('')
   const [toDate, setToDate]                   = useState('')
@@ -64,7 +67,8 @@ export default function SubscriptionsPage() {
 
   // ── fetch ──────────────────────────────────────────────────────────────────
 
-  async function fetchSubscriptions() {
+  const fetchSubscriptions = useCallback(async () => {
+    const supabase = createClient()
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     try {
@@ -78,11 +82,17 @@ export default function SubscriptionsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
-  useEffect(() => { fetchSubscriptions() }, []) // eslint-disable-line
+  useEffect(() => {
+    void fetchSubscriptions()
+    const refresh = () => { void fetchSubscriptions() }
+    window.addEventListener('subtrack:data-changed', refresh)
+    return () => window.removeEventListener('subtrack:data-changed', refresh)
+  }, [fetchSubscriptions])
 
   async function handleMerge(pair: DuplicatePair) {
+    const supabase = createClient()
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     setMerging(pair.merge.id)
@@ -101,6 +111,7 @@ export default function SubscriptionsPage() {
   // ── add ────────────────────────────────────────────────────────────────────
 
   async function handleAdd(formData: SubscriptionInput) {
+    const supabase = createClient()
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
     const created = await createSubscription(session.access_token, formData)
@@ -111,6 +122,7 @@ export default function SubscriptionsPage() {
   // ── update ─────────────────────────────────────────────────────────────────
 
   async function handleEdit(formData: SubscriptionInput) {
+    const supabase = createClient()
     const { data: { session } } = await supabase.auth.getSession()
     if (!session || !editingSubscription) throw new Error('Not authenticated')
     const updated = await updateSubscription(session.access_token, editingSubscription.id, formData)
@@ -122,6 +134,7 @@ export default function SubscriptionsPage() {
   // ── delete ─────────────────────────────────────────────────────────────────
 
   async function handleDelete(id: string) {
+    const supabase = createClient()
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
     await deleteSubscription(session.access_token, id)
@@ -129,10 +142,23 @@ export default function SubscriptionsPage() {
     toast.success('Payment deleted')
   }
 
+  function askAssistant(subscription: Subscription) {
+    setAssistantSubscription(subscription)
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('subtrack:ask-agent', {
+        detail: {
+          prompt: `Find current cheaper alternatives to ${subscription.name}. Compare like-for-like plans and cite the pricing sources.`,
+        },
+      }))
+    }, 0)
+  }
+
   // ── derived stats ──────────────────────────────────────────────────────────
 
   const active       = subscriptions.filter(s => s.is_active)
-  const totalMonthly = active.reduce((sum, s) => sum + monthlyEquivalent(s), 0)
+  const trials       = active.filter(subscription => isActiveTrial(subscription))
+  const paid         = active.filter(s => !isActiveTrial(s))
+  const totalMonthly = paid.reduce((sum, s) => sum + monthlyEquivalent(s), 0)
 
   // ── filter / sort ──────────────────────────────────────────────────────────
 
@@ -158,12 +184,34 @@ export default function SubscriptionsPage() {
     return list
   }, [subscriptions, search, selectedCategory, period, fromDate, toDate, sortOrder])
 
-  const totalAmount = filtered.reduce((sum, s) => sum + (s.converted_amount ?? s.amount), 0)
+  const totalAmount = filtered
+    .filter(s => !isActiveTrial(s))
+    .reduce((sum, s) => sum + (s.converted_amount ?? s.amount), 0)
   const totalLabel  = filtered.length > 0
     ? `${filtered.length} item${filtered.length !== 1 ? 's' : ''} · ${formatCurrency(totalAmount, baseCurrency)} total`
     : ''
 
   const isFiltered = !!(search || selectedCategory || period !== 'all' || fromDate || toDate)
+
+  useRegisterAgentPageContext({
+    selected_subscription_ids: editingSubscription
+      ? [editingSubscription.id]
+      : reminderSubscription
+        ? [reminderSubscription.id]
+        : assistantSubscription
+          ? [assistantSubscription.id]
+          : [],
+    visible_subscription_ids: filtered.slice(0, 25).map(subscription => subscription.id),
+    filters: {
+      ...(search ? { search } : {}),
+      ...(selectedCategory ? { category: selectedCategory } : {}),
+      due_period: period,
+      ...(fromDate ? { from_date: fromDate } : {}),
+      ...(toDate ? { to_date: toDate } : {}),
+      sort_order: sortOrder,
+      group_by_category: groupByCategory,
+    },
+  })
 
   // ── grouped render helper ──────────────────────────────────────────────────
 
@@ -176,6 +224,8 @@ export default function SubscriptionsPage() {
             subscription={sub}
             onDelete={handleDelete}
             onEdit={setEditingSubscription}
+            onReminders={setReminderSubscription}
+            onAskAssistant={askAssistant}
           />
         ))}
       </div>
@@ -212,7 +262,7 @@ export default function SubscriptionsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Recurring payments</h1>
           {!loading && subscriptions.length > 0 && (
             <p className="text-sm text-muted-foreground mt-1 tabular-nums">
-              {active.length} active · {formatCurrency(totalMonthly, baseCurrency)}/mo ·{' '}
+              {paid.length} paid{trials.length ? ` · ${trials.length} free trial${trials.length === 1 ? '' : 's'}` : ''} · {formatCurrency(totalMonthly, baseCurrency)}/mo ·{' '}
               {formatCurrency(totalMonthly * 12, baseCurrency)}/yr
             </p>
           )}
@@ -309,7 +359,7 @@ export default function SubscriptionsPage() {
           <FilterBar
             categories={categories}
             selectedCategory={selectedCategory}
-            onCategoryChange={setSelectedCategory}
+            onCategoryChange={category => setSelectedCategory(category as Category | '')}
             period={period}
             onPeriodChange={p => setPeriod(p as 'all' | 'day' | 'week' | 'month')}
             fromDate={fromDate}
@@ -382,6 +432,16 @@ export default function SubscriptionsPage() {
         onSubmit={handleEdit}
         initialData={editingSubscription ?? undefined}
       />
+
+      {reminderSubscription ? (
+        <ReminderDialog
+          subscription={reminderSubscription}
+          open
+          onOpenChange={open => {
+            if (!open) setReminderSubscription(null)
+          }}
+        />
+      ) : null}
 
     </div>
   )

@@ -1,85 +1,97 @@
 # Subtrack
 
-A production-grade personal finance dashboard for tracking subscriptions, expenses, and budgets, with an AI financial agent that can query your data and take actions on your behalf.
+Subtrack is a recurring-payment tracker with a page-aware AI assistant. It finds likely subscriptions and free trials from Gmail, keeps payment totals and reminders in one place, and lets users ask questions or propose changes in natural language.
 
-Live at [subtrack-beryl.vercel.app](https://subtrack-beryl.vercel.app)
+Live frontend: [subtrack-beryl.vercel.app](https://subtrack-beryl.vercel.app)
 
-## Overview
+## What it does
 
-Subtrack is a full-stack finance management app built with Next.js, FastAPI, and PostgreSQL. It lets users track recurring subscriptions, log one-off expenses, set monthly budgets per category, and monitor overall spending from a single dashboard. An AI agent built on the Anthropic Claude API with 11 custom tools allows users to query their financial data and perform actions through natural conversation rather than navigating forms.
+- Tracks subscriptions, rent, bills, memberships, and other recurring payments.
+- Shows monthly and yearly totals with chart, category, and payment views.
+- Detects likely recurring payments and trials from the last three months of Gmail receipts.
+- Creates dashboard reminders for renewals, cancellation dates, and expiring free trials.
+- Provides a persistent, resizable AI workspace with conversation history and page context.
+- Answers questions about totals, changes, duplicate payments, upcoming charges, and avoidable spending.
+- Proposes add, edit, remove, merge, reminder, and review actions; the user confirms every write before it runs.
+- Researches cheaper alternatives with citations and a bounded per-user cache/rate limit.
+- Supports AUD, USD, GBP, SGD, EUR, and JPY with stored conversion snapshots.
 
-## Features
+Subtrack provides spending information and organisation tools, not investment, tax, credit, or regulated financial advice.
 
-**Dashboard**
-- Monthly spend summary, upcoming bills, and budget status at a glance
-- Multi-currency support with live exchange rates via the Frankfurter API
-- Currency context cached on the frontend with a one-hour stale check to minimise API calls
-
-**Subscription Tracker**
-- Add, view, and delete recurring bills with due date tracking
-- Supports multiple currencies per subscription
-
-**Expense Logger**
-- Log one-off expenses by category and date
-- Multi-currency entries resolved to base currency for dashboard totals
-
-**Budget Manager**
-- Set monthly limits per category
-- Live spend tracking against each budget
-
-**AI Financial Agent**
-- Conversational interface embedded in the dashboard
-- 11 custom tools covering read queries (expenses, subscriptions, budgets, income, savings goals) and write actions (log expense, add subscription, create and update savings goals)
-- Agent reasons over real user data to answer questions, log transactions, flag non-essential spending, and predict affordability
-- Built using Anthropic Claude API tool calling with a multi-turn conversation loop
-
-## Technical Stack
+## Stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js, TypeScript, TailwindCSS |
-| Backend | FastAPI, Python |
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS |
+| Backend | FastAPI, SQLAlchemy, Alembic |
 | Database | Neon PostgreSQL |
-| Auth | Supabase (Google OAuth, shared JWT) |
-| AI Agent | Anthropic Claude API with tool calling |
-| Currency | Frankfurter API (live exchange rates) |
-| Deployment | Vercel (frontend), Render (backend) |
+| Authentication | Supabase Auth with Google OAuth |
+| AI | Anthropic Claude API |
+| Gmail | Google Gmail API with read-only scope |
+| Deployment | Vercel frontend, Render API |
 
-## Architecture
+## Repository
 
-```
-User
- └── Next.js Frontend (Vercel)
-       └── FastAPI Backend (Render)
-             ├── Neon PostgreSQL
-             ├── Supabase Auth (shared JWT with UniVise)
-             ├── Anthropic Claude API (AI agent with tool calling)
-             └── Frankfurter API (live currency rates)
-```
-
-Every database record is scoped by `user_id`. The backend owns all data access — the frontend never queries the database directly. JWT auth is validated on every request.
-
-## AI Agent Architecture
-
-The agent uses Claude's tool calling feature. On each user message, the full conversation history and tool definitions are sent to the Claude API. Claude decides which tools to call and in what order, the backend executes each tool against the database, results are returned to Claude, and a final response is streamed back to the user. The loop continues until Claude has enough information to respond.
-
-Tools are split into read tools (get expenses, subscriptions, budgets, income, savings goals, upcoming bills, spending by category) and write tools (create expense, create subscription, create and update savings goals). Intelligence tools handle cross-data reasoning such as affordability prediction and non-essential expense flagging.
-
-## Project Structure
-
-```
+```text
 subtrack/
-├── frontend/
-│   ├── app/                  # Next.js app router pages
-│   ├── components/           # Shared UI components
-│   └── context/
-│       └── CurrencyContext   # Live rate caching, one-hour stale check
-├── backend/
-│   ├── app/
-│   │   ├── routers/          # FastAPI route handlers
-│   │   ├── models/           # SQLAlchemy models
-│   │   ├── agent/            # Claude tool definitions and conversation loop
-│   │   └── main.py
-│   └── requirements.txt
+├── subtrack-frontend/       # Next.js application
+├── subtrack-backend/        # FastAPI application, tests, and migrations
+├── render.yaml              # Render Blueprint
 └── README.md
 ```
+
+Every user-owned database query is scoped by the verified Supabase user ID. The frontend never connects directly to PostgreSQL. AI write actions are stored as proposals and require explicit confirmation.
+
+## Local development
+
+Frontend environment (`subtrack-frontend/.env.local`):
+
+```dotenv
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_SUPPORT_EMAIL=... # recommended for the public privacy policy
+```
+
+Backend environment (`subtrack-backend/.env`):
+
+```dotenv
+DATABASE_URL=...
+SUPABASE_JWT_SECRET=...
+SUPABASE_URL=...
+ANTHROPIC_API_KEY=...
+ALLOWED_ORIGINS=http://localhost:3000
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=http://127.0.0.1:8000/gmail/callback
+TOKEN_ENCRYPTION_KEY=...
+```
+
+Run the services in separate terminals:
+
+```bash
+cd subtrack-backend
+venv/bin/python scripts/migrate.py
+venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+```bash
+cd subtrack-frontend
+npm run dev
+```
+
+## Release checks
+
+```bash
+cd subtrack-backend
+venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+venv/bin/alembic current
+venv/bin/pip check
+
+cd ../subtrack-frontend
+npx tsc --noEmit
+npm run lint
+npm run build
+```
+
+Production requires the Vercel environment values above, all `render.yaml` secrets, the Render Blueprint applied to an always-on paid service, and the production Google OAuth redirect URI. Gmail's restricted read-only scope must complete Google's verification requirements before a public launch.

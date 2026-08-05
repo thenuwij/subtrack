@@ -26,6 +26,7 @@ export interface Subscription {
   converted_amount: number | null  // null for legacy entries
   cycle: BillingCycle
   next_due: string | null
+  trial_ends_at: string | null       // post-trial price is stored in `amount`
   is_active: boolean
   created_at: string
 }
@@ -40,6 +41,7 @@ export interface SubscriptionInput {
   converted_amount?: number | null
   cycle: BillingCycle
   next_due?: string | null
+  trial_ends_at?: string | null
   is_active?: boolean
   full_amount?: number | null
   share_ratio?: number
@@ -53,6 +55,11 @@ export interface GmailStatus {
   last_scanned_at?: string | null
   scan_status?: 'idle' | 'running' | 'done' | 'error'
   scan_error?: string | null
+  scan_stage?: 'queued' | 'reading' | 'analysing' | 'finalising' | 'complete' | null
+  scan_processed?: number
+  scan_total?: number
+  scan_partial?: boolean
+  scan_message?: string | null
 }
 
 export interface DetectedSubscription {
@@ -67,6 +74,7 @@ export interface DetectedSubscription {
   cancelled: boolean
   confidence: 'high' | 'medium'
   charge_count: number
+  trial_ends_at: string | null
   existing_subscription_id: string | null
   product_key: string
   current_amount: number | null                       // what you pay today, if tracked
@@ -113,6 +121,35 @@ export interface Rates {
 export interface Preferences {
   base_currency: Currency
   monthly_income: number | null  // null until the user states it
+}
+
+export type ReminderKind = 'cancel' | 'renewal' | 'trial_end'
+export type ReminderStatus = 'due' | 'upcoming' | 'overdue' | 'dismissed' | 'needs_date'
+
+export interface PaymentReminder {
+  id: string
+  subscription_id: string
+  subscription_name: string
+  kind: ReminderKind
+  days_before: number
+  target_at: string | null
+  alert_at: string | null
+  date_source: 'fixed_date' | 'recorded' | 'projected_from_recorded_cycle' | 'missing'
+  status: ReminderStatus
+  days_until_target: number | null
+  days_until_alert: number | null
+  note: string | null
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ReminderInput {
+  subscription_id: string
+  kind: ReminderKind
+  days_before: number
+  target_date?: string | null
+  note?: string | null
 }
 
 export interface DuplicateBrief {

@@ -15,6 +15,14 @@ import { formatCategory } from '@/lib/utils/categories'
 
 const today = new Date().toISOString().split('T')[0]
 
+function dateOnly(value: string | null | undefined) {
+  return value ? value.slice(0, 10) : ''
+}
+
+function dateAtNoonUtc(value: string) {
+  return new Date(`${value}T12:00:00Z`).toISOString()
+}
+
 const CATEGORIES: Category[] = ['streaming', 'software', 'cloud', 'utilities', 'fitness', 'food', 'transport', 'other']
 const CYCLES: BillingCycle[] = ['weekly', 'monthly', 'yearly']
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
@@ -26,6 +34,8 @@ interface FormState {
   currency: Currency
   cycle: BillingCycle
   next_due: string
+  is_trial: boolean
+  trial_ends_at: string
   is_active: boolean
   share_ratio: number     // equal split; scales if the bill changes
   share_amount: string    // agreed uneven amount; pinned when the bill changes
@@ -48,7 +58,9 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
     amount: '',
     currency: baseCurrency,
     cycle: 'monthly',
-    next_due: today,
+    next_due: '',
+    is_trial: false,
+    trial_ends_at: '',
     is_active: true,
     share_ratio: 1,
     share_amount: '',
@@ -63,9 +75,9 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
       amount: (initialData.full_amount ?? initialData.amount).toString(),
       currency: initialData.currency as Currency,
       cycle: initialData.cycle,
-      next_due: initialData.next_due
-        ? new Date(initialData.next_due).toISOString().split('T')[0]
-        : '',
+      next_due: dateOnly(initialData.next_due),
+      is_trial: Boolean(initialData.trial_ends_at),
+      trial_ends_at: dateOnly(initialData.trial_ends_at),
       is_active: initialData.is_active,
       share_ratio: initialData.split_mode === 'ratio' ? initialData.share_ratio : 1,
       share_amount:
@@ -139,6 +151,7 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
   async function handleSubmit() {
     if (!form.name.trim()) return setError('Name is required.')
     if (isNaN(amount) || amount <= 0) return setError('Enter a valid amount greater than 0.')
+    if (form.is_trial && !form.trial_ends_at) return setError('Add the date this free trial ends.')
     if (rateLoading) return setError('Waiting for exchange rate, please try again.')
     if (rateError) return setError('Exchange rate unavailable. Cannot submit.')
 
@@ -158,7 +171,10 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
         exchange_rate: exchangeRate,
         converted_amount: form.currency === baseCurrency ? myAmount : convertedAmount,
         cycle: form.cycle,
-        next_due: form.next_due ? new Date(form.next_due).toISOString() : new Date(today).toISOString(),
+        next_due: form.is_trial
+          ? dateAtNoonUtc(form.trial_ends_at)
+          : form.next_due ? dateAtNoonUtc(form.next_due) : null,
+        trial_ends_at: form.is_trial ? dateAtNoonUtc(form.trial_ends_at) : null,
         is_active: form.is_active,
       })
       setForm(DEFAULT_FORM)
@@ -203,7 +219,9 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
 
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
-              <Label htmlFor="sub-amount">{isShared ? 'Full bill' : 'Amount'}</Label>
+              <Label htmlFor="sub-amount">
+                {form.is_trial ? 'Price after trial' : isShared ? 'Full bill' : 'Amount'}
+              </Label>
               <Input id="sub-amount" type="number" min="0" step="0.01" placeholder="0.00" value={form.amount} onChange={e => set('amount', e.target.value)} disabled={loading} />
             </div>
             <div className="grid gap-1.5">
@@ -296,10 +314,46 @@ export function AddSubscriptionModal({ open, onClose, onSubmit, initialData }: P
             </Select>
           </div>
 
-          <div className="grid gap-1.5">
-            <Label htmlFor="sub-due">Next renewal date <span className="font-normal text-muted-foreground">(optional)</span></Label>
-            <Input id="sub-due" type="date" value={form.next_due} onChange={e => set('next_due', e.target.value)} disabled={loading} />
-          </div>
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/30 p-3">
+            <input
+              type="checkbox"
+              checked={form.is_trial}
+              onChange={event => {
+                set('is_trial', event.target.checked)
+                if (!event.target.checked) set('trial_ends_at', '')
+              }}
+              disabled={loading}
+              className="mt-0.5 h-4 w-4 accent-primary"
+            />
+            <span>
+              <span className="block text-sm font-medium text-foreground">This is a free trial</span>
+              <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">
+                The amount above is what you&apos;ll pay after the trial. Subtrack will add a dashboard reminder 7 days before it ends.
+              </span>
+            </span>
+          </label>
+
+          {form.is_trial ? (
+            <div className="grid gap-1.5">
+              <Label htmlFor="sub-trial-end">Trial end date</Label>
+              <Input
+                id="sub-trial-end"
+                type="date"
+                min={today}
+                value={form.trial_ends_at}
+                onChange={e => set('trial_ends_at', e.target.value)}
+                disabled={loading}
+              />
+              <p className="text-xs text-muted-foreground">
+                This is also saved as the first expected charge date.
+              </p>
+            </div>
+          ) : (
+            <div className="grid gap-1.5">
+              <Label htmlFor="sub-due">Next renewal date <span className="font-normal text-muted-foreground">(optional)</span></Label>
+              <Input id="sub-due" type="date" value={form.next_due} onChange={e => set('next_due', e.target.value)} disabled={loading} />
+            </div>
+          )}
 
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>

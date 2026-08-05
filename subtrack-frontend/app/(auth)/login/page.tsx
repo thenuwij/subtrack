@@ -1,5 +1,6 @@
 'use client'
 import { useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { LogoMark } from '@/components/layout/Logo'
 
@@ -44,7 +45,9 @@ export default function LoginPage() {
       {/* Sign-in */}
       <div className="flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm">
-          <LogoMark className="h-10 w-10" />
+          <Link href="/" aria-label="Subtrack home" className="inline-flex">
+            <LogoMark className="h-10 w-10" />
+          </Link>
 
           <h1 className="mt-8 text-3xl font-semibold tracking-tight text-foreground">
             Know what your recurring payments really cost
@@ -86,9 +89,8 @@ export default function LoginPage() {
             </p>
           )}
 
-          <p className="mt-6 text-xs text-muted-foreground">
-            By continuing you agree to our terms of service. Subtrack only ever
-            reads your email — it never sends anything.
+          <p className="mt-6 text-xs leading-5 text-muted-foreground">
+            By continuing you agree to our <Link className="underline hover:text-foreground" href="/terms">terms</Link> and acknowledge our <Link className="underline hover:text-foreground" href="/privacy">privacy policy</Link>. Subtrack only ever reads your email—it never sends anything.
           </p>
         </div>
       </div>

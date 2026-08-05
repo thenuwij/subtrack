@@ -18,6 +18,7 @@ import type { Currency } from '@/types'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/layout/ThemeToggle'
 import { toast } from 'sonner'
+import { GmailScanProgress } from '@/components/gmail/GmailScanProgress'
 
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
 
@@ -41,23 +42,28 @@ export default function AccountPage() {
     async function loadIncome() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
-      const prefs = await getPreferences(session.access_token)
-      if (prefs.monthly_income !== null && prefs.monthly_income !== undefined) {
-        setIncome(String(prefs.monthly_income))
+      try {
+        const prefs = await getPreferences(session.access_token)
+        if (prefs.monthly_income !== null && prefs.monthly_income !== undefined) {
+          setIncome(String(prefs.monthly_income))
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Could not load account preferences.')
       }
     }
-    loadIncome()
+    void loadIncome()
 
     async function loadGmail() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) return
       try {
         setGmail(await getGmailStatus(session.access_token))
-      } catch {
-        // Gmail may not be configured on this deployment; the section just hides.
+      } catch (error) {
+        setGmail({ connected: false })
+        setGmailError(error instanceof Error ? error.message : 'Could not load Gmail status.')
       }
     }
-    loadGmail()
+    void loadGmail()
 
     // Read (and clear) the outcome the callback redirected with, so a failed
     // connect explains itself instead of just appearing not to have worked.
@@ -85,7 +91,7 @@ export default function AccountPage() {
       } catch {
         // Transient poll failure — keep the last known state and retry.
       }
-    }, 5000)
+    }, 3000)
     return () => clearInterval(timer)
   }, [gmail?.scan_status])
 
@@ -119,7 +125,16 @@ export default function AccountPage() {
     try {
       await withToken(async token => {
         await startGmailScan(token)
-        setGmail(g => (g ? { ...g, scan_status: 'running' } : g))
+        setGmail(g => (g ? {
+          ...g,
+          scan_status: 'running',
+          scan_error: null,
+          scan_stage: 'queued',
+          scan_processed: 0,
+          scan_total: 0,
+          scan_partial: false,
+          scan_message: null,
+        } : g))
         router.push('/review')
       })
     } catch (e) {
@@ -330,6 +345,10 @@ export default function AccountPage() {
 
               {gmail.scan_error && (
                 <p className="text-xs text-destructive">Last scan failed: {gmail.scan_error}</p>
+              )}
+
+              {(gmail.scan_status === 'running' || gmail.scan_partial) && (
+                <GmailScanProgress gmail={gmail} compact />
               )}
 
               <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">

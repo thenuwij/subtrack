@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:3000"
     environment: str = "development"
     anthropic_api_key: str
+    database_pool_size: int = 5
+    database_max_overflow: int = 5
+    database_pool_timeout: float = 10.0
 
     # Gmail OAuth. Restricted scope (gmail.readonly) — fine for test users,
     # needs a CASA assessment before real users.

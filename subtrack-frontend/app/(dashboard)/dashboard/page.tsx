@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowDownRight,
@@ -13,14 +13,30 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { getGmailStatus, getSubscriptions, getSubscriptionChanges, getPreferences } from '@/lib/api'
-import type { GmailStatus, Subscription, SubscriptionChange } from '@/types'
+import {
+  dismissReminder,
+  getGmailStatus,
+  getPreferences,
+  getReminders,
+  getSubscriptionChanges,
+  getSubscriptions,
+} from '@/lib/api'
+import type {
+  GmailStatus,
+  PaymentReminder,
+  Subscription,
+  SubscriptionChange,
+} from '@/types'
 import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
 import { categoryColor } from '@/lib/utils/categories'
 import { SpendBreakdown } from '@/components/dashboard/SpendBreakdown'
 import { DashboardSkeleton } from '@/components/dashboard/DashboardSkeleton'
 import { Button } from '@/components/ui/button'
+import { ReminderCenter } from '@/components/reminders/ReminderCenter'
+import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
+import { toast } from 'sonner'
+import { isActiveTrial } from '@/lib/utils/trials'
 
 // 52 weeks / 12 months. Using 4.33 loses ~0.04 of a week each month, which
 // compounds to a visibly short annual figure on a large weekly bill like rent.
@@ -41,47 +57,85 @@ export default function DashboardPage() {
   const [changes, setChanges] = useState<SubscriptionChange[]>([])
   const [monthlyIncome, setMonthlyIncome] = useState<number | null>(null)
   const [gmail, setGmail] = useState<GmailStatus | null>(null)
+  const [reminders, setReminders] = useState<PaymentReminder[]>([])
+  const [reminderError, setReminderError] = useState('')
+  const [remindersRetrying, setRemindersRetrying] = useState(false)
   const [changesExpanded, setChangesExpanded] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const { baseCurrency, convertAmount } = useCurrency()
 
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        const supabase = createClient()
-        const { data: { session } } = await supabase.auth.getSession()
-        if (!session) return
+  const fetchData = useCallback(async () => {
+    try {
+      const supabase = createClient()
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
 
-        const token = session.access_token
-        const [subs, chgs, prefs, gmailStatus] = await Promise.all([
-          getSubscriptions(token),
-          getSubscriptionChanges(token, 30),
-          getPreferences(token),
-          getGmailStatus(token).catch(() => null),
-        ])
+      const token = session.access_token
+      const [subsResult, changesResult, preferencesResult, gmailStatus, reminderResult] = await Promise.all([
+        getSubscriptions(token)
+          .then(rows => ({ rows, error: '' }))
+          .catch(error => ({
+            rows: null,
+            error: error instanceof Error ? error.message : 'Could not load recurring payments.',
+          })),
+        getSubscriptionChanges(token, 30).catch(() => null),
+        getPreferences(token).catch(() => null),
+        getGmailStatus(token).catch(() => null),
+        getReminders(token, { horizonDays: 90 })
+          .then(rows => ({ rows, error: '' }))
+          .catch(error => ({
+            rows: [],
+            error: error instanceof Error ? error.message : 'Could not load reminders.',
+          })),
+      ])
 
-        setSubscriptions(subs)
-        setChanges(chgs)
-        setMonthlyIncome(prefs.monthly_income ?? null)
-        setGmail(gmailStatus)
-      } finally {
-        setLoading(false)
+      if (subsResult.rows) {
+        setSubscriptions(subsResult.rows)
+        setLoadError('')
+      } else {
+        setLoadError(subsResult.error)
       }
+      if (changesResult) setChanges(changesResult)
+      if (preferencesResult) setMonthlyIncome(preferencesResult.monthly_income ?? null)
+      setGmail(gmailStatus)
+      setReminders(reminderResult.rows)
+      setReminderError(reminderResult.error)
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Could not load your dashboard.')
+    } finally {
+      setLoading(false)
     }
-
-    fetchData()
   }, [])
+
+  useEffect(() => {
+    void fetchData()
+    const refresh = () => { void fetchData() }
+    window.addEventListener('subtrack:data-changed', refresh)
+    return () => window.removeEventListener('subtrack:data-changed', refresh)
+  }, [fetchData])
+
+  useRegisterAgentPageContext({
+    visible_subscription_ids: subscriptions.slice(0, 25).map(subscription => subscription.id),
+    visible_reminder_ids: reminders.slice(0, 25).map(reminder => reminder.id),
+  })
 
   // Everything is normalised to a monthly figure in the base currency so the
   // numbers on this page are actually comparable to each other.
   const ranked = useMemo(() => {
     return subscriptions
+      .filter(subscription => !isActiveTrial(subscription))
       .map((s) => ({
         subscription: s,
         monthly: convertAmount(toMonthly(s.amount, s.cycle), s.currency),
       }))
       .sort((a, b) => b.monthly - a.monthly)
   }, [subscriptions, convertAmount])
+
+  const activeTrials = useMemo(
+    () => subscriptions.filter(subscription => isActiveTrial(subscription)),
+    [subscriptions]
+  )
 
   const monthlyTotal = useMemo(
     () => ranked.reduce((sum, r) => sum + r.monthly, 0),
@@ -112,9 +166,56 @@ export default function DashboardPage() {
       .sort((a, b) => b.share - a.share)
   }, [ranked, monthlyTotal])
 
+  async function handleDismissReminder(id: string) {
+    const { data: { session } } = await createClient().auth.getSession()
+    if (!session) throw new Error('Your session has expired.')
+    try {
+      await dismissReminder(session.access_token, id)
+      setReminders(current => current.filter(reminder => reminder.id !== id))
+      toast.success('Reminder dismissed')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not dismiss reminder.')
+    }
+  }
+
+  async function retryReminders() {
+    setRemindersRetrying(true)
+    try {
+      const { data: { session } } = await createClient().auth.getSession()
+      if (!session) throw new Error('Your session has expired.')
+      const rows = await getReminders(session.access_token, { horizonDays: 90 })
+      setReminders(rows)
+      setReminderError('')
+    } catch (error) {
+      setReminderError(error instanceof Error ? error.message : 'Could not load reminders.')
+    } finally {
+      setRemindersRetrying(false)
+    }
+  }
+
   if (loading) return <DashboardSkeleton />
 
   const hasPayments = subscriptions.length > 0
+
+  if (loadError && !hasPayments) {
+    return (
+      <div className="mx-auto max-w-xl px-4 py-16 text-center sm:px-6">
+        <div className="rounded-2xl border border-destructive/20 bg-card p-8 shadow-sm">
+          <h1 className="text-xl font-semibold text-foreground">Couldn&apos;t load your dashboard</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{loadError}</p>
+          <Button
+            className="mt-5"
+            onClick={() => {
+              setLoading(true)
+              void fetchData()
+            }}
+          >
+            Try again
+          </Button>
+        </div>
+      </div>
+    )
+  }
 
   // First run is the product's one chance to explain itself. A dashboard of
   // zeroes explains nothing, so the empty state sells the thing that makes
@@ -170,6 +271,13 @@ export default function DashboardPage() {
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="space-y-10">
 
+        {loadError && (
+          <div className="flex flex-col gap-3 rounded-xl border border-destructive/20 bg-destructive/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted-foreground">Couldn&apos;t refresh your payments. Showing the last loaded totals.</p>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>Retry</Button>
+          </div>
+        )}
+
         {/* ── Hero ────────────────────────────────────────────────────────
             No card, no border, no icon chip. One number, given the room to
             be the thing you look at first. */}
@@ -195,7 +303,10 @@ export default function DashboardPage() {
               {formatCurrency(monthlyTotal * 12, baseCurrency)} a year
             </span>
             <span className="tabular-nums">
-              {subscriptions.length} active payment{subscriptions.length === 1 ? '' : 's'}
+              {ranked.length} paid payment{ranked.length === 1 ? '' : 's'}
+              {activeTrials.length > 0
+                ? ` · ${activeTrials.length} free trial${activeTrials.length === 1 ? '' : 's'}`
+                : ''}
             </span>
             {shareOfIncome !== null ? (
               // Stated plainly. Colouring this red would be scolding someone
@@ -231,6 +342,28 @@ export default function DashboardPage() {
             </div>
           )}
         </section>
+
+        <ReminderCenter
+          reminders={reminders}
+          onDismiss={handleDismissReminder}
+        />
+        {reminderError ? (
+          <section className="flex flex-col gap-3 rounded-2xl border border-amber-500/25 bg-amber-500/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Reminders are unavailable</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{reminderError}</p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={remindersRetrying}
+              onClick={() => void retryReminders()}
+              className="self-start sm:self-center"
+            >
+              {remindersRetrying ? 'Trying again…' : 'Try again'}
+            </Button>
+          </section>
+        ) : null}
 
         {/* ── Inbox nudge — only while there's something to act on ─────── */}
         {gmail && !gmail.connected && (

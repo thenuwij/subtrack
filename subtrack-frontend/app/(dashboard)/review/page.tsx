@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ArrowUpRight, Check, Mail, RotateCcw, X } from 'lucide-react'
+import { ArrowUpRight, Check, Clock3, Mail, RotateCcw, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import {
   approveDetected,
@@ -17,6 +17,8 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { Button } from '@/components/ui/button'
 import { formatCategory } from '@/lib/utils/categories'
 import { toast } from 'sonner'
+import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
+import { GmailScanProgress } from '@/components/gmail/GmailScanProgress'
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
@@ -45,21 +47,39 @@ export default function ReviewPage() {
   const [tab, setTab] = useState<'pending' | 'dismissed'>('pending')
   const [shares, setShares] = useState<Record<string, number>>({})
   const [custom, setCustom] = useState<Record<string, string>>({})
+  const [trialPrices, setTrialPrices] = useState<Record<string, string>>({})
+  const [loadError, setLoadError] = useState('')
 
-  async function load() {
+  useRegisterAgentPageContext({
+    visible_detection_ids: items.slice(0, 25).map(item => item.id),
+    filters: { review_status: tab },
+  })
+
+  const load = useCallback(async () => {
     const t = await token()
     if (!t) return
-    const [detected, status] = await Promise.all([getDetected(t, tab), getGmailStatus(t)])
-    setItems(detected)
-    setGmail(status)
-    return status as GmailStatus
-  }
+    try {
+      const [detected, status] = await Promise.all([getDetected(t, tab), getGmailStatus(t)])
+      setItems(detected)
+      setGmail(status)
+      setLoadError('')
+      return status as GmailStatus
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Could not load inbox findings.')
+      return undefined
+    }
+  }, [tab])
 
   useEffect(() => {
     setLoading(true)
-    load().finally(() => setLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab])
+    void load().finally(() => setLoading(false))
+  }, [load])
+
+  useEffect(() => {
+    const refresh = () => { void load() }
+    window.addEventListener('subtrack:data-changed', refresh)
+    return () => window.removeEventListener('subtrack:data-changed', refresh)
+  }, [load])
 
   // Per-detection share of the bill. A receipt shows the whole cost, but the
   // user may only pay part of it (rent split with housemates, a shared energy
@@ -89,15 +109,13 @@ export default function ReviewPage() {
     return Number.isFinite(mine) && mine > 0 && mine < billed ? mine : null
   }
 
-  // While a scan runs there's nothing to show until it finishes, so poll for it.
+  // Poll both status and findings: successful model batches are committed as
+  // they finish, so useful results can appear before the bounded scan ends.
   useEffect(() => {
     if (gmail?.scan_status !== 'running') return
-    const timer = setInterval(() => { load() }, 4000)
+    const timer = setInterval(() => { void load() }, 3000)
     return () => clearInterval(timer)
-    // `load` is redefined every render; depending on it would restart the
-    // interval constantly. The scan status is the only real trigger.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gmail?.scan_status])
+  }, [gmail?.scan_status, load])
 
   async function restore(id: string) {
     const t = await token()
@@ -106,6 +124,9 @@ export default function ReviewPage() {
     try {
       await restoreDetected(t, id)
       setItems(prev => prev.filter(i => i.id !== id))
+      toast.success('Detection restored')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not restore this detection.')
     } finally {
       setBusy(null)
     }
@@ -122,6 +143,12 @@ export default function ReviewPage() {
     setBusy(id)
     try {
       const item = items.find(i => i.id === id)
+      const enteredTrialPrice = parseFloat(trialPrices[id] ?? '')
+      if (item?.trial_ends_at && item.amount <= 0
+          && (!Number.isFinite(enteredTrialPrice) || enteredTrialPrice <= 0)) {
+        toast.error('Enter the price that will be charged after the trial.')
+        return
+      }
       const fixed = item ? fixedShare(id, item.amount) : null
       const ratio = shares[id]
       await approveDetected(t, id, {
@@ -131,9 +158,15 @@ export default function ReviewPage() {
             ? { share_ratio: ratio }
             : {}),
         ...(replaceId ? { replace_subscription_id: replaceId } : {}),
+        ...(item?.trial_ends_at && item.amount <= 0
+          ? { amount: enteredTrialPrice }
+          : {}),
       })
       setItems(prev => prev.filter(i => i.id !== id))
       setChoosing(null)
+      toast.success('Review item approved')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not add this payment.')
     } finally {
       setBusy(null)
     }
@@ -151,6 +184,9 @@ export default function ReviewPage() {
       await dismissDetected(t, id)
       // Drop it locally rather than refetching — the row is gone either way.
       setItems(prev => prev.filter(i => i.id !== id))
+      toast.success('Detection dismissed')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not dismiss this detection.')
     } finally {
       setBusy(null)
     }
@@ -161,7 +197,16 @@ export default function ReviewPage() {
     if (!t) return
     try {
       await startGmailScan(t)
-      setGmail(g => (g ? { ...g, scan_status: 'running', scan_error: null } : g))
+      setGmail(g => (g ? {
+        ...g,
+        scan_status: 'running',
+        scan_error: null,
+        scan_stage: 'queued',
+        scan_processed: 0,
+        scan_total: 0,
+        scan_partial: false,
+        scan_message: null,
+      } : g))
     } catch (e) {
       // Leave the button usable and say why — a silently ignored click reads
       // as the app being broken.
@@ -187,6 +232,13 @@ export default function ReviewPage() {
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
       <div className="space-y-6">
+        {loadError && (
+          <div className="flex flex-col gap-3 rounded-xl border border-destructive/20 bg-destructive/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted-foreground">{loadError}</p>
+            <Button variant="outline" size="sm" onClick={() => void load()}>Try again</Button>
+          </div>
+        )}
+
         <section className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="space-y-2">
             <p className="text-sm font-medium text-primary">From your inbox</p>
@@ -230,7 +282,7 @@ export default function ReviewPage() {
           </div>
         )}
 
-        {!gmail?.connected ? (
+        {gmail && !gmail.connected ? (
           <div className="rounded-2xl bg-card p-6 shadow-sm">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -251,21 +303,15 @@ export default function ReviewPage() {
               </div>
             </div>
           </div>
-        ) : gmail.scan_error ? (
+        ) : gmail?.scan_error ? (
           <div className="rounded-2xl border border-destructive/20 bg-destructive/5 p-6">
             <p className="text-sm font-medium text-destructive">Last scan failed</p>
             <p className="mt-1 text-sm text-muted-foreground">{gmail.scan_error}</p>
           </div>
         ) : null}
 
-        {scanning && (
-          <div className="rounded-2xl bg-card p-6 shadow-sm">
-            <p className="text-sm font-medium text-foreground">Reading your inbox…</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              The first scan of a busy inbox can take several minutes. Results
-              appear below as they&apos;re found — you can leave and come back.
-            </p>
-          </div>
+        {gmail && (scanning || gmail.scan_partial) && (
+          <GmailScanProgress gmail={gmail} />
         )}
 
         {items.length === 0 && !scanning && gmail?.connected ? (
@@ -295,6 +341,7 @@ export default function ReviewPage() {
               const isPriceChange = item.existing_subscription_id !== null
               const rose =
                 item.previous_amount !== null && item.amount > item.previous_amount
+              const isTrial = item.trial_ends_at !== null
 
               return (
                 <div
@@ -311,6 +358,12 @@ export default function ReviewPage() {
                             Price change
                           </span>
                         )}
+                        {isTrial && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                            <Clock3 className="h-3 w-3" />
+                            Free trial
+                          </span>
+                        )}
                         {item.cancelled && (
                           <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                             Cancelled
@@ -323,6 +376,27 @@ export default function ReviewPage() {
                         )}
                       </div>
 
+                      {isTrial && item.amount <= 0 ? (
+                        <div className="max-w-xs space-y-1.5">
+                          <label htmlFor={`trial-price-${item.id}`} className="text-xs font-medium text-foreground">
+                            Price after trial ({item.currency})
+                          </label>
+                          <input
+                            id={`trial-price-${item.id}`}
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            inputMode="decimal"
+                            value={trialPrices[item.id] ?? ''}
+                            onChange={event => setTrialPrices(current => ({
+                              ...current,
+                              [item.id]: event.target.value,
+                            }))}
+                            placeholder="Required before approval"
+                            className="w-full rounded-md border border-border bg-background px-2.5 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                          />
+                        </div>
+                      ) : (
                       <p className="text-sm text-muted-foreground">
                         {isShared ? (
                           <>
@@ -344,13 +418,28 @@ export default function ReviewPage() {
                         {' · '}
                         {formatCurrency(monthly * 12, item.currency)}/yr
                       </p>
+                      )}
+
+                      {isTrial ? (
+                        <p className="text-xs text-muted-foreground">
+                          Trial ends{' '}
+                          <span className="font-medium text-foreground">
+                            {new Intl.DateTimeFormat('en-AU', {
+                              day: 'numeric', month: 'short', year: 'numeric',
+                            }).format(new Date(item.trial_ends_at!))}
+                          </span>
+                          . Approving saves this as the first charge date and creates a dashboard reminder 7 days before.
+                        </p>
+                      ) : null}
 
                       {/* The evidence. You're being asked to trust a guess, so
                           show what it's based on. */}
                       <p className="text-xs text-muted-foreground">
                         {item.charge_count > 0
                           ? `${item.charge_count} charge${item.charge_count === 1 ? '' : 's'} found`
-                          : 'No charges found — detected from cancellation notice'}
+                          : isTrial
+                            ? 'No charge yet — detected from a trial email'
+                            : 'No charges found — detected from cancellation notice'}
                         {' · '}
                         <span>{formatCategory(item.category)}</span>
                         {' · via '}
@@ -457,7 +546,7 @@ export default function ReviewPage() {
                       {/* Receipts show the whole bill. Shared costs — rent,
                           household utilities — need only the user's portion. */}
                       <div className={`flex-wrap items-center gap-1.5 pt-1 ${
-                        tab === 'dismissed' ? 'hidden' : 'flex'
+                        tab === 'dismissed' || item.amount <= 0 ? 'hidden' : 'flex'
                       }`}>
                         <span className="mr-1 text-xs text-muted-foreground">
                           I pay
