@@ -19,6 +19,7 @@ from app.models import AgentMessage, AgentThread  # noqa: E402
 from app.routers.agent import (  # noqa: E402
     AgentPageContext,
     _get_thread,
+    _append_research_sources,
     _model_history,
     _normalise_title,
     _public_error,
@@ -51,6 +52,7 @@ class AgentFoundationTests(unittest.TestCase):
             "list_review_detections",
             "get_saving_candidates",
             "list_payment_reminders",
+            "research_cheaper_alternatives",
         })
         for name in read_names:
             self.assertNotIn(name.split("_", 1)[0], {
@@ -66,6 +68,15 @@ class AgentFoundationTests(unittest.TestCase):
             tool["input_schema"].get("additionalProperties") is False
             for tool in TOOL_DEFINITIONS
         ))
+
+    def test_research_sources_are_preserved_and_unsafe_links_are_dropped(self):
+        rendered = _append_research_sources("A current comparison.", [
+            {"title": "Official [pricing]", "url": "https://example.com/pricing"},
+            {"title": "Unsafe", "url": "javascript:alert(1)"},
+        ])
+        self.assertIn("https://example.com/pricing", rendered)
+        self.assertNotIn("javascript:", rendered)
+        self.assertEqual(rendered.count("### Sources"), 1)
 
     def test_page_context_is_allow_listed_and_bounded(self):
         context = AgentPageContext.model_validate({

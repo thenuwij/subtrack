@@ -53,6 +53,7 @@ export default function SubscriptionsPage() {
   const [modalOpen, setModalOpen]         = useState(false)
   const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null)
   const [reminderSubscription, setReminderSubscription] = useState<Subscription | null>(null)
+  const [assistantSubscription, setAssistantSubscription] = useState<Subscription | null>(null)
   const { baseCurrency } = useCurrency()
 
   // filter / sort / group state
@@ -141,6 +142,17 @@ export default function SubscriptionsPage() {
     toast.success('Payment deleted')
   }
 
+  function askAssistant(subscription: Subscription) {
+    setAssistantSubscription(subscription)
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('subtrack:ask-agent', {
+        detail: {
+          prompt: `Find current cheaper alternatives to ${subscription.name}. Compare like-for-like plans and cite the pricing sources.`,
+        },
+      }))
+    }, 0)
+  }
+
   // ── derived stats ──────────────────────────────────────────────────────────
 
   const active       = subscriptions.filter(s => s.is_active)
@@ -186,7 +198,9 @@ export default function SubscriptionsPage() {
       ? [editingSubscription.id]
       : reminderSubscription
         ? [reminderSubscription.id]
-        : [],
+        : assistantSubscription
+          ? [assistantSubscription.id]
+          : [],
     visible_subscription_ids: filtered.slice(0, 25).map(subscription => subscription.id),
     filters: {
       ...(search ? { search } : {}),
@@ -211,6 +225,7 @@ export default function SubscriptionsPage() {
             onDelete={handleDelete}
             onEdit={setEditingSubscription}
             onReminders={setReminderSubscription}
+            onAskAssistant={askAssistant}
           />
         ))}
       </div>

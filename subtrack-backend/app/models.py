@@ -325,3 +325,33 @@ class AgentAction(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class AgentResearchCache(Base):
+    """Short-lived, user-scoped cache for cited alternative research.
+
+    Current prices change, so this is deliberately not permanent financial
+    data.  The fingerprint includes the tracked payment snapshot, market and
+    user requirements; editing any of them forces fresh research.
+    """
+
+    __tablename__ = "agent_research_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "fingerprint",
+            name="uq_agent_research_cache_user_fingerprint",
+        ),
+        Index("ix_agent_research_cache_user_created", "user_id", "created_at"),
+        Index("ix_agent_research_cache_expires", "expires_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, nullable=False, index=True)
+    subscription_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    fingerprint = Column(String(64), nullable=False)
+    market = Column(String(80), nullable=False)
+    requirements = Column(String(500), nullable=True)
+    result_json = Column(JSON, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())

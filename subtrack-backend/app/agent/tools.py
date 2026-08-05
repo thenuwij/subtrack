@@ -20,6 +20,7 @@ from app.agent.finance import (
     saving_candidates,
     upcoming_charges,
 )
+from app.agent.research import ALTERNATIVE_RESEARCH_TOOL, research_alternatives
 
 
 CATEGORIES = [
@@ -161,6 +162,7 @@ READ_TOOL_DEFINITIONS = [
             "additionalProperties": False,
         },
     },
+    ALTERNATIVE_RESEARCH_TOOL,
 ]
 
 TOOL_DEFINITIONS = READ_TOOL_DEFINITIONS + ACTION_TOOL_DEFINITIONS
@@ -205,4 +207,6 @@ def run_tool(
         return saving_candidates(db, user_id, tool_input.get("limit", 5))
     if tool_name == "list_payment_reminders":
         return reminders_overview(db, user_id, tool_input)
+    if tool_name == "research_cheaper_alternatives":
+        return research_alternatives(db, user_id, tool_input)
     return {"error": "Unknown assistant tool"}

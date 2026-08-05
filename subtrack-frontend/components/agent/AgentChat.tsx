@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
+import { useEffect, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { MessageCircle, X } from 'lucide-react'
 import { AgentWorkspace } from '@/components/agent/AgentWorkspace'
@@ -21,9 +21,21 @@ export function AgentChat() {
   const router = useRouter()
   const rememberPageContext = useRememberAgentPageContext()
   const [open, setOpen] = useState(false)
+  const [draftRequest, setDraftRequest] = useState<{ id: number; text: string } | null>(null)
   const [storedWidth, setStoredWidth] = useStoredString(WIDTH_KEY, String(DEFAULT_WIDTH))
   const parsedWidth = Number(storedWidth)
   const width = clampWidth(Number.isFinite(parsedWidth) ? parsedWidth : DEFAULT_WIDTH)
+
+  useEffect(() => {
+    function openWithDraft(event: Event) {
+      const detail = (event as CustomEvent<{ prompt?: string }>).detail
+      if (!detail?.prompt) return
+      setDraftRequest({ id: Date.now(), text: detail.prompt })
+      setOpen(true)
+    }
+    window.addEventListener('subtrack:ask-agent', openWithDraft)
+    return () => window.removeEventListener('subtrack:ask-agent', openWithDraft)
+  }, [])
 
   function resizeStart(event: PointerEvent<HTMLDivElement>) {
     event.preventDefault()
@@ -91,6 +103,7 @@ export function AgentChat() {
         />
         <AgentWorkspace
           variant="panel"
+          draftRequest={draftRequest}
           onClose={() => setOpen(false)}
           onOpenFullPage={() => {
             rememberPageContext()

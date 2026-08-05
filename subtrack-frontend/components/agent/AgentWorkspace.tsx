@@ -75,9 +75,9 @@ const suggestions = {
     'What should I review to potentially save money?',
   ],
   subscriptions: [
-    'Remind me 7 days before my next selected payment.',
+    'Find current cheaper alternatives to one of my payments.',
     'Are there any possible duplicate records?',
-    'Help me add a recurring payment.',
+    'Remind me 7 days before my next selected payment.',
   ],
   review: [
     'Help me review the items on this page.',
@@ -91,8 +91,8 @@ const suggestions = {
   ],
   assistant: [
     'What do my recurring payments cost each month?',
+    'Find current cheaper alternatives to a payment.',
     'Add a recurring payment for me.',
-    'Which reminders need my attention?',
   ],
   unknown: [
     'What do my recurring payments cost each month?',
@@ -106,6 +106,7 @@ interface AgentWorkspaceProps {
   onClose?: () => void
   onOpenFullPage?: () => void
   tokenProvider?: () => Promise<string>
+  draftRequest?: { id: number; text: string } | null
 }
 
 function temporaryMessage(
@@ -167,6 +168,7 @@ export function AgentWorkspace({
   onClose,
   onOpenFullPage,
   tokenProvider = accessToken,
+  draftRequest,
 }: AgentWorkspaceProps) {
   const router = useRouter()
   const pageContext = useAgentPageContext()
@@ -266,6 +268,12 @@ export function AgentWorkspace({
     if (!loadingHistory) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [loadingHistory, messages])
 
+  useEffect(() => {
+    if (!draftRequest) return
+    setInput(draftRequest.text)
+    requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [draftRequest])
+
   async function newConversation(skipInitialMessageLoad = false) {
     if (loading) return null
     try {
@@ -288,7 +296,11 @@ export function AgentWorkspace({
 
   function handleStreamEvent(event: AgentStreamEvent, temporaryId: string) {
     if (event.type === 'status') {
-      setStatusText(event.state === 'using_tool' ? 'Checking your data…' : 'Thinking…')
+      setStatusText(event.state === 'using_tool'
+        ? event.tool === 'research_cheaper_alternatives'
+          ? 'Researching current prices…'
+          : 'Checking your data…'
+        : 'Thinking…')
       return
     }
     if (event.type === 'delta') {

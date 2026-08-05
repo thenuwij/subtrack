@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { Subscription } from '@/types'
 import { Button } from '@/components/ui/button'
-import { Bell, Clock3, Trash2, Pencil } from 'lucide-react'
+import { Bell, Clock3, Trash2, Pencil, Sparkles } from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
 import { categoryColor, formatCategory } from '@/lib/utils/categories'
@@ -26,9 +26,16 @@ interface Props {
   onDelete: (id: string) => Promise<void>
   onEdit: (subscription: Subscription) => void
   onReminders: (subscription: Subscription) => void
+  onAskAssistant?: (subscription: Subscription) => void
 }
 
-export function SubscriptionCard({ subscription, onDelete, onEdit, onReminders }: Props) {
+export function SubscriptionCard({
+  subscription,
+  onDelete,
+  onEdit,
+  onReminders,
+  onAskAssistant,
+}: Props) {
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting]     = useState(false)
   const { baseCurrency, convertAmount } = useCurrency()
@@ -105,6 +112,18 @@ export function SubscriptionCard({ subscription, onDelete, onEdit, onReminders }
 
         {!confirming ? (
           <div className="flex gap-1">
+            {onAskAssistant ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                onClick={() => onAskAssistant(subscription)}
+                aria-label={`Ask the assistant about cheaper alternatives to ${subscription.name}`}
+                title="Compare current alternatives"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
               size="icon"
