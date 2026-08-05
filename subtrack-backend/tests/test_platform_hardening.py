@@ -417,3 +417,59 @@ class CapabilityMetadataTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SchemaReadinessTests(unittest.TestCase):
+    """A reachable database is not a working one.
+
+    Shipping code whose migrations had not run left every signed-in page
+    returning 500 while the deploy looked healthy: the queries referenced
+    columns that did not exist yet. Readiness has to fail instead, so the
+    release stops and the previous version keeps serving — which is the only
+    safety net where the migration cannot be run automatically before release.
+    """
+
+    def _ready(self):
+        from app.main import app
+
+        return asyncio.run(_request(app, "GET", "/health/ready"))
+
+    def test_a_matching_schema_reports_its_revision(self):
+        with patch("app.main._expected_schema_revision", return_value="0011_x"), \
+                patch("app.main._schema_revision", return_value="0011_x"):
+            response = self._ready()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["schema_revision"], "0011_x")
+
+    def test_a_database_behind_the_code_is_not_ready(self):
+        with patch("app.main._expected_schema_revision", return_value="0012_new"), \
+                patch("app.main._schema_revision", return_value="0011_x"):
+            response = self._ready()
+
+        self.assertEqual(response.status_code, 503)
+        detail = response.json()["detail"]
+        # The message has to name both revisions and the command that fixes it;
+        # a bare "not ready" sends someone hunting through logs.
+        self.assertIn("0011_x", detail)
+        self.assertIn("0012_new", detail)
+        self.assertIn("migrate.py", detail)
+
+    def test_an_undeterminable_revision_never_blocks_a_release(self):
+        # Local SQLite has no alembic_version table, and a packaging change
+        # could hide the migration scripts. Neither is evidence of a mismatch,
+        # so neither may fail a deploy.
+        cases = ((None, "0011_x"), ("0011_x", None), (None, None))
+        for expected, applied in cases:
+            with self.subTest(expected=expected, applied=applied):
+                with patch("app.main._expected_schema_revision", return_value=expected), \
+                        patch("app.main._schema_revision", return_value=applied):
+                    self.assertEqual(self._ready().status_code, 200)
+
+    def test_the_expected_revision_resolves_from_the_real_migrations(self):
+        # Guards the alembic.ini path: a wrong one degrades the check to a
+        # permanent no-op that still returns 200 and protects nothing.
+        from app.main import _expected_schema_revision
+
+        _expected_schema_revision.cache_clear()
+        self.assertIsNotNone(_expected_schema_revision())

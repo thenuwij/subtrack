@@ -2,9 +2,11 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text
@@ -251,8 +253,65 @@ def health_check():
     return {"status": "ok", "app": "Subtrack API", "release": release_metadata()}
 
 
+@lru_cache(maxsize=1)
+def _expected_schema_revision() -> str | None:
+    """The migration this build of the code expects, read once from disk."""
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        root = Path(__file__).resolve().parents[1]
+        heads = ScriptDirectory.from_config(Config(str(root / "alembic.ini"))).get_heads()
+        return heads[0] if len(heads) == 1 else None
+    except Exception:  # noqa: BLE001 - a readiness probe must not crash on this
+        logger.warning("Could not determine the expected schema revision")
+        return None
+
+
+def _schema_revision(connection) -> str | None:
+    """The migration actually applied to this database, or None if unknowable."""
+    try:
+        return connection.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar()
+    except Exception:  # noqa: BLE001 - absent table means an unmigrated database
+        return None
+
+
 @app.get("/health/ready")
 def readiness_check():
+    """Ready means the database is reachable *and* matches this code.
+
+    A reachable database is not a working one. Shipping code whose migrations
+    have not been applied left every signed-in page returning 500 while the
+    deploy looked perfectly healthy — the queries referenced columns that did
+    not exist yet. Checking the revision here turns that into a failed deploy
+    that keeps the previous version serving, which matters most where the
+    migration cannot run automatically before release.
+    """
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
-    return {"status": "ready", "app": "Subtrack API", "release": release_metadata()}
+        expected = _expected_schema_revision()
+        applied = _schema_revision(connection)
+
+    # Only a definite mismatch fails. An unreadable revision on either side is
+    # reported rather than guessed at, so a probe never blocks a release over
+    # something it could not actually determine.
+    if expected is not None and applied is not None and applied != expected:
+        logger.error(
+            "Database schema is at %s but this build expects %s", applied, expected,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Database schema is at {applied}; this release expects {expected}. "
+                "Run `python scripts/migrate.py` against it, then redeploy."
+            ),
+        )
+
+    return {
+        "status": "ready",
+        "app": "Subtrack API",
+        "release": release_metadata(),
+        "schema_revision": applied,
+    }
