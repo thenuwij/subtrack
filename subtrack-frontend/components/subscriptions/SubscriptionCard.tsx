@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Bell, Clock3, Trash2, Pencil, Sparkles } from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
-import { categoryColor, formatCategory } from '@/lib/utils/categories'
+import { formatCategory } from '@/lib/utils/categories'
+import { BrandLogo } from '@/components/shared/BrandLogo'
 import { isActiveTrial } from '@/lib/utils/trials'
 import {
   cadenceLabel,
@@ -82,13 +83,9 @@ export function SubscriptionCard({
   return (
     <div className="flex flex-col gap-3 px-4 py-3 transition-colors hover:bg-muted/40 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
 
-      {/* Left — dot + name + subtitle */}
+      {/* Left — logo + name + subtitle */}
       <div className="flex items-center gap-3 flex-1 min-w-0">
-        <span
-          className="w-2 h-2 rounded-full shrink-0"
-          style={{ backgroundColor: categoryColor(subscription.category) }}
-          aria-hidden="true"
-        />
+        <BrandLogo name={subscription.name} category={subscription.category} />
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <p className="truncate text-sm font-medium leading-tight">{subscription.name}</p>

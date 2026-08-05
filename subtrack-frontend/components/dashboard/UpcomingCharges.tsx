@@ -7,6 +7,7 @@ import type { SubscriptionForecast } from '@/types'
 import { Button } from '@/components/ui/button'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatStoredDate } from '@/lib/utils/dates'
+import { BrandLogo } from '@/components/shared/BrandLogo'
 
 function formatDueDate(value: string) {
   return formatStoredDate(value, {
@@ -93,6 +94,7 @@ export function UpcomingCharges({ forecast, error, retrying, onRetry }: Props) {
                 <time dateTime={charge.due_at} className="w-20 shrink-0 text-xs font-medium tabular-nums text-muted-foreground sm:w-24">
                   {formatDueDate(charge.due_at)}
                 </time>
+                <BrandLogo name={charge.name} category={charge.category} className="h-7 w-7" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-foreground">{charge.name}</p>
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
