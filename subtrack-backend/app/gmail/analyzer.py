@@ -225,9 +225,13 @@ class DetectedSubscription(BaseModel):
 
     @model_validator(mode="after")
     def normalize_cadence(self):
-        pair_present = self.interval_unit is not None and self.interval_count is not None
+        # A half-supplied pair is not a cadence. Rejecting the row would fail
+        # the whole parse and take every other subscription in the same API
+        # call with it, so an incomplete pair is discarded rather than raised.
         if (self.interval_unit is None) != (self.interval_count is None):
-            raise ValueError("Billing interval unit and count must be provided together")
+            self.interval_unit = None
+            self.interval_count = None
+        pair_present = self.interval_unit is not None and self.interval_count is not None
 
         # Accept the old analyzer shape without making it the new model's silent
         # default. This keeps interrupted/saved work and focused tests readable.
@@ -241,13 +245,20 @@ class DetectedSubscription(BaseModel):
 
         # A guessed pair is no better than no pair. Review must ask the user
         # rather than letting a compatibility cycle masquerade as evidence.
-        if self.cadence_confidence == "unknown":
+        #
+        # A confidence claim with no pair behind it is the same situation from
+        # the other side: the model asserted a cadence it never supplied. The
+        # constraint is a cross-field rule, which a JSON schema cannot express,
+        # so the model is never told about it and breaks it routinely. Raising
+        # discarded all eight sender domains in the call over one malformed
+        # row — and when every batch held one, the entire scan failed. Treat
+        # the claim as the unknown it actually is and let review ask.
+        if self.cadence_confidence == "unknown" or not pair_present:
+            self.cadence_confidence = "unknown"
             self.interval_unit = None
             self.interval_count = None
             self.cycle = None
             self.cadence_evidence = None
-        elif not pair_present:
-            raise ValueError("A confident cadence needs an interval unit and count")
         else:
             cadence = Cadence(self.interval_unit, self.interval_count)
             self.cycle = _legacy_cycle_value(cadence)

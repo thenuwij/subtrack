@@ -505,3 +505,66 @@ class GmailDetectionIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CadenceClaimWithoutEvidenceTests(unittest.TestCase):
+    """A malformed cadence must not take the rest of the batch down with it.
+
+    ``messages.parse`` validates the whole ``AnalysisResult``, so a raised
+    ValueError discarded every subscription found in the same API call — eight
+    sender domains lost to one row. When each of the three parallel calls held
+    one such row, the whole scan reported "couldn't be analysed".
+    """
+
+    def analyzed(self, **changes):
+        values = {
+            "sender_domain": "vendor.example",
+            "merchant": "Vendor Pro",
+            "product_key": "vendor-pro",
+            "interval_unit": "month",
+            "interval_count": 1,
+            "cadence_confidence": "high",
+            "cadence_evidence": "Email says billed monthly.",
+            "amount": 19.99,
+            "currency": "AUD",
+            "previous_amount": None,
+            "cancelled": False,
+            "amount_type": "fixed",
+            "category": "software",
+            "confidence": "high",
+            "charge_count": 3,
+            "trial_ends_at": None,
+        }
+        values.update(changes)
+        return AnalyzedSubscription(**values)
+
+    def test_confidence_without_a_cadence_pair_becomes_unknown(self):
+        # The model routinely claims confidence and omits the pair: the rule is
+        # a cross-field one, which a JSON schema cannot express, so it is never
+        # shown the constraint it is being judged against.
+        found = self.analyzed(
+            interval_unit=None,
+            interval_count=None,
+            cycle=None,
+            cadence_confidence="high",
+        )
+
+        self.assertEqual(found.cadence_confidence, "unknown")
+        self.assertIsNone(found.interval_unit)
+        self.assertIsNone(found.interval_count)
+        self.assertIsNone(found.cadence_evidence)
+
+    def test_half_a_cadence_pair_is_discarded_rather_than_rejected(self):
+        found = self.analyzed(interval_unit="month", interval_count=None, cycle=None)
+
+        self.assertEqual(found.cadence_confidence, "unknown")
+        self.assertIsNone(found.interval_unit)
+        self.assertIsNone(found.interval_count)
+
+    def test_a_complete_cadence_still_survives_untouched(self):
+        found = self.analyzed(interval_unit="week", interval_count=2)
+
+        self.assertEqual(found.cadence_confidence, "high")
+        self.assertEqual(found.interval_unit, "week")
+        self.assertEqual(found.interval_count, 2)
+        self.assertEqual(found.cadence_evidence, "Email says billed monthly.")
