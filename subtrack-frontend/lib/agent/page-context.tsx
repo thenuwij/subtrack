@@ -22,6 +22,7 @@ export interface AgentPageDetails {
   selected_subscription_ids?: string[]
   visible_subscription_ids?: string[]
   visible_detection_ids?: string[]
+  visible_reminder_ids?: string[]
   filters?: AgentPageFilters
 }
 
@@ -81,6 +82,7 @@ export function AgentPageContextProvider({ children }: { children: ReactNode }) 
       selected_subscription_ids: details.selected_subscription_ids?.slice(0, 25) ?? [],
       visible_subscription_ids: details.visible_subscription_ids?.slice(0, 25) ?? [],
       visible_detection_ids: details.visible_detection_ids?.slice(0, 25) ?? [],
+      visible_reminder_ids: details.visible_reminder_ids?.slice(0, 25) ?? [],
       ...(details.filters ? { filters: details.filters } : {}),
     }
   }, [pathname, registered])
@@ -95,6 +97,7 @@ export function AgentPageContextProvider({ children }: { children: ReactNode }) 
       selected_subscription_ids: source.selected_subscription_ids,
       visible_subscription_ids: source.visible_subscription_ids,
       visible_detection_ids: source.visible_detection_ids,
+      visible_reminder_ids: source.visible_reminder_ids,
       ...(source.filters ? { filters: source.filters } : {}),
     }
   }, [currentPageContext, sourceContext])

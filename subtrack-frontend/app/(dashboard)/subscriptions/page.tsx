@@ -15,6 +15,7 @@ import { formatCurrency }         from '@/lib/utils/currency'
 import { formatCategory }         from '@/lib/utils/categories'
 import { toast } from 'sonner'
 import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
+import { ReminderDialog } from '@/components/reminders/ReminderDialog'
 
 function monthlyEquivalent(sub: Subscription): number {
   const amount = sub.converted_amount ?? sub.amount
@@ -52,6 +53,7 @@ export default function SubscriptionsPage() {
   const [error, setError]                 = useState<string | null>(null)
   const [modalOpen, setModalOpen]         = useState(false)
   const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null)
+  const [reminderSubscription, setReminderSubscription] = useState<Subscription | null>(null)
   const { baseCurrency } = useCurrency()
 
   // filter / sort / group state
@@ -167,7 +169,11 @@ export default function SubscriptionsPage() {
   const isFiltered = !!(search || selectedCategory || period !== 'all' || fromDate || toDate)
 
   useRegisterAgentPageContext({
-    selected_subscription_ids: editingSubscription ? [editingSubscription.id] : [],
+    selected_subscription_ids: editingSubscription
+      ? [editingSubscription.id]
+      : reminderSubscription
+        ? [reminderSubscription.id]
+        : [],
     visible_subscription_ids: filtered.slice(0, 25).map(subscription => subscription.id),
     filters: {
       ...(search ? { search } : {}),
@@ -191,6 +197,7 @@ export default function SubscriptionsPage() {
             subscription={sub}
             onDelete={handleDelete}
             onEdit={setEditingSubscription}
+            onReminders={setReminderSubscription}
           />
         ))}
       </div>
@@ -397,6 +404,16 @@ export default function SubscriptionsPage() {
         onSubmit={handleEdit}
         initialData={editingSubscription ?? undefined}
       />
+
+      {reminderSubscription ? (
+        <ReminderDialog
+          subscription={reminderSubscription}
+          open
+          onOpenChange={open => {
+            if (!open) setReminderSubscription(null)
+          }}
+        />
+      ) : null}
 
     </div>
   )

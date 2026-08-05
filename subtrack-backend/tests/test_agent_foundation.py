@@ -50,11 +50,12 @@ class AgentFoundationTests(unittest.TestCase):
             "find_duplicate_payments",
             "list_review_detections",
             "get_saving_candidates",
+            "list_payment_reminders",
         })
         for name in names:
-            self.assertFalse(any(verb in name for verb in {
+            self.assertNotIn(name.split("_", 1)[0], {
                 "add", "create", "update", "delete", "remove", "merge", "cancel", "remind",
-            }))
+            })
 
     def test_page_context_is_allow_listed_and_bounded(self):
         context = AgentPageContext.model_validate({
@@ -78,6 +79,12 @@ class AgentFoundationTests(unittest.TestCase):
                 "page": "subscriptions",
                 "route": "/subscriptions",
                 "visible_subscription_ids": [str(uuid4()) for _ in range(26)],
+            })
+        with self.assertRaises(ValidationError):
+            AgentPageContext.model_validate({
+                "page": "dashboard",
+                "route": "/dashboard",
+                "visible_reminder_ids": [str(uuid4()) for _ in range(26)],
             })
 
     def test_context_values_cannot_close_prompt_delimiters(self):

@@ -23,6 +23,7 @@ from app.models import (
     DetectedSubscription,
     DetectionStatus,
     Subscription,
+    PaymentReminder,
 )
 from app.routers.subscriptions import (log_change, monthly_equivalent, rebill,
                                        resolve_split)
@@ -183,6 +184,10 @@ def approve(
         sub.source_key = detection.product_key or sub.source_key
         if detection.cancelled:
             sub.is_active = False
+            db.query(PaymentReminder).filter(
+                PaymentReminder.user_id == user_id,
+                PaymentReminder.subscription_id == sub.id,
+            ).update({PaymentReminder.is_active: False}, synchronize_session=False)
         after = monthly_equivalent(sub.amount, sub.cycle)
         if after != before:
             log_change(db, sub, ChangeKind.price_change, before, after)

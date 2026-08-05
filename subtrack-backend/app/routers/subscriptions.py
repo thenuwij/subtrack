@@ -5,7 +5,10 @@ from typing import NamedTuple, Optional
 from datetime import datetime
 from uuid import UUID
 from app.database import get_db
-from app.models import Subscription, BillingCycle, Category, SubscriptionChange, ChangeKind
+from app.models import (
+    Subscription, BillingCycle, Category, SubscriptionChange, ChangeKind,
+    PaymentReminder,
+)
 from app.middleware.auth import verify_token
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
@@ -197,6 +200,12 @@ def update_subscription(
     for key, value in fields.items():
         setattr(sub, key, value)
 
+    if fields.get("is_active") is False:
+        db.query(PaymentReminder).filter(
+            PaymentReminder.user_id == user_id,
+            PaymentReminder.subscription_id == sub.id,
+        ).update({PaymentReminder.is_active: False}, synchronize_session=False)
+
     after = monthly_equivalent(sub.amount, sub.cycle)
     if after != before:
         log_change(db, sub, ChangeKind.price_change, before, after)
@@ -273,6 +282,29 @@ def merge_subscription(
         SubscriptionChange.subscription_id == source.id
     ).update({SubscriptionChange.subscription_id: target.id})
 
+    # Reminders belong to the recurring commitment, not the display row. Keep
+    # them alive when duplicate records are folded together.
+    target_reminders = db.query(PaymentReminder).filter(
+        PaymentReminder.user_id == user_id,
+        PaymentReminder.subscription_id == target.id,
+        PaymentReminder.is_active == True,  # noqa: E712
+    ).all()
+    existing_keys = {
+        (item.kind, item.days_before, item.target_date) for item in target_reminders
+    }
+    source_reminders = db.query(PaymentReminder).filter(
+        PaymentReminder.user_id == user_id,
+        PaymentReminder.subscription_id == source.id,
+    ).all()
+    for reminder in source_reminders:
+        key = (reminder.kind, reminder.days_before, reminder.target_date)
+        if reminder.is_active and key in existing_keys:
+            db.delete(reminder)
+        else:
+            reminder.subscription_id = target.id
+            if reminder.is_active:
+                existing_keys.add(key)
+
     db.delete(source)
     db.commit()
     db.refresh(target)
@@ -292,6 +324,10 @@ def delete_subscription(
     if not sub:
         raise HTTPException(status_code=404, detail="Subscription not found")
     log_change(db, sub, ChangeKind.removed, monthly_equivalent(sub.amount, sub.cycle), None)
+    db.query(PaymentReminder).filter(
+        PaymentReminder.user_id == user_id,
+        PaymentReminder.subscription_id == sub.id,
+    ).delete(synchronize_session=False)
     db.delete(sub)
     db.commit()
     return {"message": "Deleted successfully"}

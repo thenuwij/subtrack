@@ -8,6 +8,7 @@ from app.agent.finance import (
     list_payments,
     payment_detail,
     review_detections,
+    reminders_overview,
     saving_candidates,
     upcoming_charges,
 )
@@ -130,6 +131,28 @@ TOOL_DEFINITIONS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "list_payment_reminders",
+        "description": (
+            "List the user's in-app renewal, cancellation, and trial reminders. "
+            "Use visible reminder IDs from page context when the user refers to reminders on screen."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reminder_ids": {
+                    "type": "array", "maxItems": 25,
+                    "items": {"type": "string", "format": "uuid"},
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["all", "due", "upcoming", "overdue", "dismissed"],
+                },
+                "horizon_days": {"type": "integer", "minimum": 1, "maximum": 730},
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -151,4 +174,6 @@ def run_tool(tool_name: str, tool_input: dict, db: Session, user_id: str):
         return review_detections(db, user_id, tool_input)
     if tool_name == "get_saving_candidates":
         return saving_candidates(db, user_id, tool_input.get("limit", 5))
+    if tool_name == "list_payment_reminders":
+        return reminders_overview(db, user_id, tool_input)
     return {"error": "Unknown read-only tool"}

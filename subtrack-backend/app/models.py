@@ -157,6 +157,38 @@ class UserPreference(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class PaymentReminder(Base):
+    """An in-app reminder tied to one of the user's recurring payments.
+
+    ``target_date`` makes trials and other one-off deadlines explicit. When it
+    is null, the next occurrence is projected from the payment's existing due
+    date and billing cycle, so renewal reminders continue across cycles.
+    """
+
+    __tablename__ = "payment_reminders"
+    __table_args__ = (
+        Index("ix_payment_reminders_user_active", "user_id", "is_active"),
+        Index("ix_payment_reminders_user_subscription", "user_id", "subscription_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, nullable=False, index=True)
+    subscription_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    kind = Column(String(24), nullable=False)  # cancel | renewal | trial_end
+    days_before = Column(Integer, nullable=False, default=7)
+    target_date = Column(DateTime, nullable=True)
+    note = Column(String(300), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    dismissed_for = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class AgentThread(Base):
     """A durable conversation owned by exactly one Subtrack user."""
 

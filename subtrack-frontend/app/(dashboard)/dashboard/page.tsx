@@ -13,14 +13,29 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { getGmailStatus, getSubscriptions, getSubscriptionChanges, getPreferences } from '@/lib/api'
-import type { GmailStatus, Subscription, SubscriptionChange } from '@/types'
+import {
+  dismissReminder,
+  getGmailStatus,
+  getPreferences,
+  getReminders,
+  getSubscriptionChanges,
+  getSubscriptions,
+} from '@/lib/api'
+import type {
+  GmailStatus,
+  PaymentReminder,
+  Subscription,
+  SubscriptionChange,
+} from '@/types'
 import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
 import { categoryColor } from '@/lib/utils/categories'
 import { SpendBreakdown } from '@/components/dashboard/SpendBreakdown'
 import { DashboardSkeleton } from '@/components/dashboard/DashboardSkeleton'
 import { Button } from '@/components/ui/button'
+import { ReminderCenter } from '@/components/reminders/ReminderCenter'
+import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
+import { toast } from 'sonner'
 
 // 52 weeks / 12 months. Using 4.33 loses ~0.04 of a week each month, which
 // compounds to a visibly short annual figure on a large weekly bill like rent.
@@ -41,6 +56,9 @@ export default function DashboardPage() {
   const [changes, setChanges] = useState<SubscriptionChange[]>([])
   const [monthlyIncome, setMonthlyIncome] = useState<number | null>(null)
   const [gmail, setGmail] = useState<GmailStatus | null>(null)
+  const [reminders, setReminders] = useState<PaymentReminder[]>([])
+  const [reminderError, setReminderError] = useState('')
+  const [remindersRetrying, setRemindersRetrying] = useState(false)
   const [changesExpanded, setChangesExpanded] = useState(false)
   const [loading, setLoading] = useState(true)
   const { baseCurrency, convertAmount } = useCurrency()
@@ -53,17 +71,25 @@ export default function DashboardPage() {
         if (!session) return
 
         const token = session.access_token
-        const [subs, chgs, prefs, gmailStatus] = await Promise.all([
+        const [subs, chgs, prefs, gmailStatus, reminderResult] = await Promise.all([
           getSubscriptions(token),
           getSubscriptionChanges(token, 30),
           getPreferences(token),
           getGmailStatus(token).catch(() => null),
+          getReminders(token, { horizonDays: 90 })
+            .then(rows => ({ rows, error: '' }))
+            .catch(error => ({
+              rows: [],
+              error: error instanceof Error ? error.message : 'Could not load reminders.',
+            })),
         ])
 
         setSubscriptions(subs)
         setChanges(chgs)
         setMonthlyIncome(prefs.monthly_income ?? null)
         setGmail(gmailStatus)
+        setReminders(reminderResult.rows)
+        setReminderError(reminderResult.error)
       } finally {
         setLoading(false)
       }
@@ -71,6 +97,11 @@ export default function DashboardPage() {
 
     fetchData()
   }, [])
+
+  useRegisterAgentPageContext({
+    visible_subscription_ids: subscriptions.slice(0, 25).map(subscription => subscription.id),
+    visible_reminder_ids: reminders.slice(0, 25).map(reminder => reminder.id),
+  })
 
   // Everything is normalised to a monthly figure in the base currency so the
   // numbers on this page are actually comparable to each other.
@@ -111,6 +142,33 @@ export default function DashboardPage() {
       }))
       .sort((a, b) => b.share - a.share)
   }, [ranked, monthlyTotal])
+
+  async function handleDismissReminder(id: string) {
+    const { data: { session } } = await createClient().auth.getSession()
+    if (!session) throw new Error('Your session has expired.')
+    try {
+      await dismissReminder(session.access_token, id)
+      setReminders(current => current.filter(reminder => reminder.id !== id))
+      toast.success('Reminder dismissed')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not dismiss reminder.')
+    }
+  }
+
+  async function retryReminders() {
+    setRemindersRetrying(true)
+    try {
+      const { data: { session } } = await createClient().auth.getSession()
+      if (!session) throw new Error('Your session has expired.')
+      const rows = await getReminders(session.access_token, { horizonDays: 90 })
+      setReminders(rows)
+      setReminderError('')
+    } catch (error) {
+      setReminderError(error instanceof Error ? error.message : 'Could not load reminders.')
+    } finally {
+      setRemindersRetrying(false)
+    }
+  }
 
   if (loading) return <DashboardSkeleton />
 
@@ -231,6 +289,28 @@ export default function DashboardPage() {
             </div>
           )}
         </section>
+
+        <ReminderCenter
+          reminders={reminders}
+          onDismiss={handleDismissReminder}
+        />
+        {reminderError ? (
+          <section className="flex flex-col gap-3 rounded-2xl border border-amber-500/25 bg-amber-500/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Reminders are unavailable</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{reminderError}</p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={remindersRetrying}
+              onClick={() => void retryReminders()}
+              className="self-start sm:self-center"
+            >
+              {remindersRetrying ? 'Trying again…' : 'Try again'}
+            </Button>
+          </section>
+        ) : null}
 
         {/* ── Inbox nudge — only while there's something to act on ─────── */}
         {gmail && !gmail.connected && (

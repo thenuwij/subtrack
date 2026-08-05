@@ -1,4 +1,4 @@
-import type { SubscriptionInput } from '@/types'
+import type { ReminderInput, SubscriptionInput } from '@/types'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -48,6 +48,7 @@ async function request(path: string, token: string, init: RequestInit = {}) {
         : `Server returned ${res.status} for ${path}.`
     )
   }
+  if (res.status === 204) return null
   return res.json()
 }
 
@@ -223,4 +224,53 @@ export async function updateSubscription(token: string, id: string, data: Partia
   })
   if (!res.ok) throw new Error('Failed to update recurring payment')
   return res.json()
+}
+
+// In-app reminders
+export async function getReminders(
+  token: string,
+  options: {
+    subscriptionId?: string
+    includeInactive?: boolean
+    includeDismissed?: boolean
+    horizonDays?: number
+  } = {}
+) {
+  const query = new URLSearchParams()
+  if (options.subscriptionId) query.set('subscription_id', options.subscriptionId)
+  if (options.includeInactive) query.set('include_inactive', 'true')
+  if (options.includeDismissed) query.set('include_dismissed', 'true')
+  if (options.horizonDays) query.set('horizon_days', String(options.horizonDays))
+  const suffix = query.size ? `?${query.toString()}` : ''
+  return request(`/reminders${suffix}`, token)
+}
+
+export function createReminder(token: string, data: ReminderInput) {
+  return request('/reminders', token, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateReminder(
+  token: string,
+  id: string,
+  data: Partial<Omit<ReminderInput, 'subscription_id'>> & { is_active?: boolean }
+) {
+  return request(`/reminders/${id}`, token, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteReminder(token: string, id: string) {
+  return request(`/reminders/${id}`, token, { method: 'DELETE' })
+}
+
+export function dismissReminder(token: string, id: string) {
+  return request(`/reminders/${id}/dismiss`, token, { method: 'POST' })
+}
+
+export function restoreReminder(token: string, id: string) {
+  return request(`/reminders/${id}/restore`, token, { method: 'POST' })
 }

@@ -34,6 +34,7 @@ export interface AgentPageContext {
   selected_subscription_ids: string[]
   visible_subscription_ids: string[]
   visible_detection_ids: string[]
+  visible_reminder_ids: string[]
   filters?: AgentPageFilters
 }
 

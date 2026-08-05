@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { Subscription } from '@/types'
 import { Button } from '@/components/ui/button'
-import { Trash2, Pencil } from 'lucide-react'
+import { Bell, Trash2, Pencil } from 'lucide-react'
 import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
 import { categoryColor, formatCategory } from '@/lib/utils/categories'
@@ -24,9 +24,10 @@ interface Props {
   subscription: Subscription
   onDelete: (id: string) => Promise<void>
   onEdit: (subscription: Subscription) => void
+  onReminders: (subscription: Subscription) => void
 }
 
-export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
+export function SubscriptionCard({ subscription, onDelete, onEdit, onReminders }: Props) {
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting]     = useState(false)
   const { baseCurrency, convertAmount } = useCurrency()
@@ -86,6 +87,15 @@ export function SubscriptionCard({ subscription, onDelete, onEdit }: Props) {
 
         {!confirming ? (
           <div className="flex gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+              onClick={() => onReminders(subscription)}
+              aria-label={`Manage reminders for ${subscription.name}`}
+            >
+              <Bell className="h-3.5 w-3.5" />
+            </Button>
             <Button
               variant="ghost"
               size="sm"

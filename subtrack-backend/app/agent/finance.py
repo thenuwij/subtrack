@@ -8,7 +8,6 @@ totals instead of quietly adding unlike currencies.
 """
 from __future__ import annotations
 
-import calendar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
@@ -17,7 +16,6 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models import (
-    BillingCycle,
     ChangeKind,
     DetectedSubscription,
     DetectionStatus,
@@ -27,6 +25,8 @@ from app.models import (
 )
 from app.routers.rates import get_cached_rate_snapshot
 from app.routers.subscriptions import monthly_equivalent
+from app.services.schedules import project_next_occurrence
+from app.services.reminders import list_user_reminders
 
 
 SCOPE_NOTE = (
@@ -259,37 +259,6 @@ def payment_detail(db: Session, user_id: str, subscription_id: str) -> dict:
     }
 
 
-def _add_months(value: datetime, months: int) -> datetime:
-    index = value.year * 12 + value.month - 1 + months
-    year, month_index = divmod(index, 12)
-    month = month_index + 1
-    day = min(value.day, calendar.monthrange(year, month)[1])
-    return value.replace(year=year, month=month, day=day)
-
-
-def _project_next_due(sub: Subscription, now: datetime) -> tuple[datetime | None, str]:
-    if not sub.next_due:
-        return None, "missing"
-    due = sub.next_due
-    if due.tzinfo is not None:
-        due = due.astimezone(timezone.utc).replace(tzinfo=None)
-    if due >= now:
-        return due, "recorded"
-    original = due
-    cycle = _enum_value(sub.cycle)
-    if cycle == BillingCycle.weekly.value:
-        weeks = max(1, int((now - due).total_seconds() // (7 * 86_400)) + 1)
-        due += timedelta(days=weeks * 7)
-    else:
-        elapsed_months = (now.year - due.year) * 12 + now.month - due.month
-        step = 12 if cycle == BillingCycle.yearly.value else 1
-        periods = max(1, elapsed_months // step)
-        due = _add_months(original, periods * step)
-        if due < now:
-            due = _add_months(original, (periods + 1) * step)
-    return due, "projected_from_recorded_cycle"
-
-
 def upcoming_charges(
     db: Session,
     user_id: str,
@@ -305,7 +274,7 @@ def upcoming_charges(
     qualities: list[str] = []
     missing_due_count = 0
     for sub in _active_subscriptions(db, user_id):
-        due, source = _project_next_due(sub, now)
+        due, source = project_next_occurrence(sub.next_due, sub.cycle, now)
         if not due:
             missing_due_count += 1
             continue
@@ -473,6 +442,33 @@ def review_detections(db: Session, user_id: str, tool_input: dict) -> dict:
         ],
         "matching_count": len(rows),
         "requires_user_review": True,
+    }
+
+
+def reminders_overview(db: Session, user_id: str, tool_input: dict) -> dict:
+    requested_ids = []
+    for value in (tool_input.get("reminder_ids") or [])[:25]:
+        try:
+            requested_ids.append(UUID(value))
+        except (TypeError, ValueError):
+            continue
+    requested_status = tool_input.get("status", "all")
+    include_dismissed = requested_status == "dismissed"
+    rows = list_user_reminders(
+        db,
+        user_id,
+        reminder_ids=requested_ids or None,
+        include_dismissed=include_dismissed,
+        horizon_days=max(1, min(int(tool_input.get("horizon_days", 90)), 730)),
+    )
+    if requested_status != "all":
+        rows = [row for row in rows if row["status"] == requested_status]
+    return {
+        "scope": "In-app reminders attached to the user's tracked recurring payments.",
+        "reminders": rows,
+        "reminder_count": len(rows),
+        "delivery": "Shown inside Subtrack; email and push delivery are not enabled.",
+        "read_only": True,
     }
 
 

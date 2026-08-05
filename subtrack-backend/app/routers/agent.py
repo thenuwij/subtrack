@@ -71,6 +71,7 @@ class AgentPageContext(BaseModel):
     selected_subscription_ids: list[UUID] = Field(default_factory=list, max_length=25)
     visible_subscription_ids: list[UUID] = Field(default_factory=list, max_length=25)
     visible_detection_ids: list[UUID] = Field(default_factory=list, max_length=25)
+    visible_reminder_ids: list[UUID] = Field(default_factory=list, max_length=25)
     filters: Optional[AgentPageFilters] = None
 
 

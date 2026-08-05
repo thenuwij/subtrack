@@ -115,6 +115,35 @@ export interface Preferences {
   monthly_income: number | null  // null until the user states it
 }
 
+export type ReminderKind = 'cancel' | 'renewal' | 'trial_end'
+export type ReminderStatus = 'due' | 'upcoming' | 'overdue' | 'dismissed' | 'needs_date'
+
+export interface PaymentReminder {
+  id: string
+  subscription_id: string
+  subscription_name: string
+  kind: ReminderKind
+  days_before: number
+  target_at: string | null
+  alert_at: string | null
+  date_source: 'fixed_date' | 'recorded' | 'projected_from_recorded_cycle' | 'missing'
+  status: ReminderStatus
+  days_until_target: number | null
+  days_until_alert: number | null
+  note: string | null
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ReminderInput {
+  subscription_id: string
+  kind: ReminderKind
+  days_before: number
+  target_date?: string | null
+  note?: string | null
+}
+
 export interface DuplicateBrief {
   id: string
   name: string
