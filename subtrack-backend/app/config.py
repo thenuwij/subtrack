@@ -79,7 +79,12 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:3000"
     # Canonical browser URL used for redirects and public links. Keep this
     # separate from the CORS allow-list, which may contain multiple origins.
-    frontend_url: str = "http://localhost:3000"
+    #
+    # Empty means "use the first allowed origin" rather than a hard-coded
+    # localhost. A deployment that sets ALLOWED_ORIGINS but has not yet heard
+    # of this setting then keeps redirecting to its own frontend, instead of
+    # sending real users to a machine that isn't theirs.
+    frontend_url: str = ""
     environment: Literal["development", "test", "production"] = "development"
     anthropic_api_key: str
     database_pool_size: int = Field(default=5, ge=1, le=50)
@@ -95,6 +100,24 @@ class Settings(BaseSettings):
     # Fernet key encrypting stored refresh tokens at rest. Generate with:
     #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     token_encryption_key: str = ""
+
+    @model_validator(mode="after")
+    def resolve_frontend_url(self) -> "Settings":
+        """Fall back to the first allowed origin when FRONTEND_URL is unset.
+
+        Runs in every environment, and before the production checks below, so
+        the fallback is validated exactly as an explicit value would be.
+        """
+        if not self.frontend_url.strip():
+            self.frontend_url = next(
+                (
+                    origin.strip()
+                    for origin in self.allowed_origins.split(",")
+                    if origin.strip()
+                ),
+                "",
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_production_urls(self) -> "Settings":

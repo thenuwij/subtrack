@@ -272,6 +272,26 @@ class ProductionSettingsTests(unittest.TestCase):
                     **overrides,
                 )
 
+    def test_unset_frontend_url_falls_back_to_the_first_allowed_origin(self):
+        """A deployment that predates FRONTEND_URL must not redirect to localhost.
+
+        This exact gap sent the deployed Gmail handshake to a developer's
+        machine: the setting was added to the blueprint, the running service
+        never received it, and the hard-coded localhost default won.
+        """
+        configured = self._settings(
+            frontend_url="",
+            allowed_origins="https://app.example.com,https://alt.example.com",
+        )
+        self.assertEqual(configured.frontend_url, "https://app.example.com")
+
+    def test_explicit_frontend_url_still_wins_over_the_fallback(self):
+        configured = self._settings(
+            frontend_url="https://alt.example.com",
+            allowed_origins="https://app.example.com,https://alt.example.com",
+        )
+        self.assertEqual(configured.frontend_url, "https://alt.example.com")
+
     def test_development_keeps_local_http_defaults(self):
         configured = Settings(
             _env_file=None,
