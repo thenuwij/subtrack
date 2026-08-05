@@ -1,6 +1,6 @@
 import os
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from uuid import UUID
 
@@ -204,7 +204,12 @@ class SubscriptionContractTests(unittest.TestCase):
         self.create(name="Cancelled", status="cancelled")
         self.create(
             name="Ended by date",
-            recurrence_end_at=datetime.now() - timedelta(days=1),
+            # Naive UTC, matching how the column is stored and how
+            # effective_status compares it. Local time here would flake daily:
+            # east of UTC the local date runs ahead, so "yesterday" local can
+            # still be today in UTC and the row would not read as ended.
+            recurrence_end_at=datetime.now(timezone.utc).replace(tzinfo=None)
+            - timedelta(days=1),
             next_due=None,
         )
 
