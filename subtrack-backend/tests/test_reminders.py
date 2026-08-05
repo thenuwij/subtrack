@@ -14,6 +14,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 from app.database import Base  # noqa: E402
 from app.agent.finance import reminders_overview  # noqa: E402
 from app.models import (  # noqa: E402
+    AgentResearchCache,
     BillingCycle,
     Category,
     PaymentReminder,
@@ -51,11 +52,15 @@ class ReminderTests(unittest.TestCase):
         user_id: str = "owner",
         next_due: datetime | None = None,
         cycle: BillingCycle = BillingCycle.monthly,
+        interval_unit: str | None = None,
+        interval_count: int | None = None,
     ) -> Subscription:
         sub = Subscription(
             id=uuid4(), user_id=user_id, name=name,
             category=Category.software, amount=20, currency="AUD",
-            converted_amount=20, cycle=cycle, next_due=next_due,
+            converted_amount=20, cycle=cycle,
+            interval_unit=interval_unit, interval_count=interval_count,
+            next_due=next_due,
             is_active=True,
         )
         self.db.add(sub)
@@ -140,6 +145,38 @@ class ReminderTests(unittest.TestCase):
         self.assertEqual(next_cycle["target_at"], "2026-09-10T00:00:00Z")
         self.assertNotEqual(next_cycle["status"], "dismissed")
 
+    def test_quarterly_reminder_returns_on_the_next_quarter(self):
+        sub = self.add_payment(
+            next_due=datetime(2026, 8, 31),
+            interval_unit="month",
+            interval_count=3,
+        )
+        reminder = self.add_reminder(sub)
+        reminder.dismissed_for = datetime(2026, 8, 31)
+        self.db.commit()
+
+        current = reminder_payload(reminder, sub, datetime(2026, 8, 20))
+        next_quarter = reminder_payload(reminder, sub, datetime(2026, 9, 1))
+
+        self.assertEqual(current["status"], "dismissed")
+        self.assertEqual(next_quarter["target_at"], "2026-11-30T00:00:00Z")
+        self.assertNotEqual(next_quarter["status"], "dismissed")
+
+    def test_paused_without_resume_and_cancelled_reminders_are_not_listed(self):
+        paused = self.add_payment(next_due=datetime(2026, 8, 10))
+        paused.status = "paused"
+        cancelled = self.add_payment(name="Cancelled", next_due=datetime(2026, 8, 11))
+        cancelled.status = "cancelled"
+        self.add_reminder(paused)
+        self.add_reminder(cancelled)
+        self.db.commit()
+
+        rows = list_user_reminders(
+            self.db, "owner", horizon_days=90, now=datetime(2026, 8, 5),
+        )
+
+        self.assertEqual(rows, [])
+
     def test_dashboard_listing_is_user_scoped_and_sorted_by_urgency(self):
         own = self.add_payment(next_due=datetime(2026, 8, 10))
         private = self.add_payment(
@@ -176,6 +213,12 @@ class ReminderTests(unittest.TestCase):
     def test_deleting_a_payment_removes_its_reminders(self):
         sub = self.add_payment(next_due=utcnow() + timedelta(days=10))
         self.add_reminder(sub)
+        self.db.add(AgentResearchCache(
+            user_id="owner", subscription_id=sub.id, fingerprint="a" * 64,
+            market="AU", result_json={"answer": "cached"},
+            expires_at=utcnow() + timedelta(days=1),
+        ))
+        self.db.commit()
 
         delete_subscription(sub.id, user_id="owner", db=self.db)
 
@@ -183,12 +226,24 @@ class ReminderTests(unittest.TestCase):
             PaymentReminder.subscription_id == sub.id,
         ).count()
         self.assertEqual(count, 0)
+        self.assertEqual(
+            self.db.query(AgentResearchCache).filter(
+                AgentResearchCache.subscription_id == sub.id,
+            ).count(),
+            0,
+        )
 
     def test_merging_duplicate_payments_preserves_one_equivalent_reminder(self):
         source = self.add_payment("Source", next_due=utcnow() + timedelta(days=10))
         target = self.add_payment("Target", next_due=source.next_due)
         self.add_reminder(source)
         self.add_reminder(target)
+        self.db.add(AgentResearchCache(
+            user_id="owner", subscription_id=source.id, fingerprint="b" * 64,
+            market="AU", result_json={"answer": "cached"},
+            expires_at=utcnow() + timedelta(days=1),
+        ))
+        self.db.commit()
 
         merge_subscription(
             source.id, MergeRequest(into=target.id), user_id="owner", db=self.db,
@@ -200,6 +255,12 @@ class ReminderTests(unittest.TestCase):
             PaymentReminder.is_active == True,  # noqa: E712
         ).all()
         self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            self.db.query(AgentResearchCache).filter(
+                AgentResearchCache.subscription_id == source.id,
+            ).count(),
+            0,
+        )
 
 
 if __name__ == "__main__":

@@ -6,10 +6,12 @@ import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { Subscription } from '@/types'
 import { formatCurrency } from '@/lib/utils/currency'
 import { CATEGORY_ORDER, categoryColor, formatCategory } from '@/lib/utils/categories'
+import { cadenceLabel } from '@/lib/utils/recurrence'
 
 export interface RankedPayment {
   subscription: Subscription
   monthly: number
+  yearly: number
 }
 
 type View = 'chart' | 'categories' | 'payments'
@@ -24,6 +26,7 @@ const VIEWS: { key: View; label: string }[] = [
 // categories has to re-pick that view on every visit otherwise.
 const STORAGE_KEY = 'subtrack.breakdown-view'
 const VIEW_CHANGE_EVENT = 'subtrack:breakdown-view'
+let memoryView: View | null = null
 
 function isView(value: string | null): value is View {
   return value === 'chart' || value === 'categories' || value === 'payments'
@@ -43,12 +46,23 @@ function subscribeToView(onChange: () => void) {
 }
 
 function readStoredView(): View {
-  const saved = localStorage.getItem(STORAGE_KEY)
-  return isView(saved) ? saved : 'chart'
+  if (memoryView) return memoryView
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    return isView(saved) ? saved : 'chart'
+  } catch {
+    return 'chart'
+  }
 }
 
 function storeView(next: View) {
-  localStorage.setItem(STORAGE_KEY, next)
+  try {
+    localStorage.setItem(STORAGE_KEY, next)
+    memoryView = null
+  } catch {
+    // A blocked preference store must not make the view control unusable.
+    memoryView = next
+  }
   window.dispatchEvent(new Event(VIEW_CHANGE_EVENT))
 }
 
@@ -56,12 +70,14 @@ interface Props {
   ranked: RankedPayment[]
   monthlyTotal: number
   baseCurrency: string
+  unavailableCount?: number
 }
 
-export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
+export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency, unavailableCount = 0 }: Props) {
   const view = useSyncExternalStore(subscribeToView, readStoredView, () => 'chart' as View)
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
   const [showAllPayments, setShowAllPayments] = useState(false)
+  const hasVariableAmounts = ranked.some(entry => entry.subscription.amount_type === 'variable')
 
   const categories = useMemo(() => {
     const totals = new Map<string, { total: number; items: RankedPayment[] }>()
@@ -100,13 +116,15 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
         <div className="mt-6 flex flex-col items-center justify-center py-10 text-center">
           <p className="text-sm font-medium text-foreground">Nothing to break down yet</p>
           <p className="mt-1 max-w-xs text-sm text-muted-foreground">
-            Once you have a few recurring payments, this shows what they add up to.
+            {unavailableCount > 0
+              ? `${unavailableCount} current payment${unavailableCount === 1 ? '' : 's'} cannot be grouped until a reliable exchange rate is available.`
+              : 'Once you have a few recurring payments, this shows what they add up to.'}
           </p>
           <Link
             href="/subscriptions"
             className="mt-4 text-sm font-medium text-primary hover:underline"
           >
-            Add a payment
+            {unavailableCount > 0 ? 'Manage payments' : 'Add a payment'}
           </Link>
         </div>
       </section>
@@ -123,6 +141,7 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
           <p className="mt-0.5 text-sm text-muted-foreground">
             {categories.length} categor{categories.length === 1 ? 'y' : 'ies'} ·{' '}
             {ranked.length} payment{ranked.length === 1 ? '' : 's'}
+            {hasVariableAmounts ? ' · includes estimates' : ''}
           </p>
         </div>
 
@@ -138,6 +157,8 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
               key={option.key}
               role="tab"
               type="button"
+              id={`breakdown-tab-${option.key}`}
+              aria-controls={`breakdown-panel-${option.key}`}
               aria-selected={view === option.key}
               onClick={() => storeView(option.key)}
               className={`rounded-[7px] px-3 py-1.5 text-xs font-medium transition-colors ${
@@ -153,7 +174,7 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
       </div>
 
       {view === 'chart' && (
-        <div className="mt-6 flex flex-col items-center gap-8 sm:flex-row sm:items-center sm:gap-10">
+        <div id="breakdown-panel-chart" role="tabpanel" aria-labelledby="breakdown-tab-chart" className="mt-6 flex flex-col items-center gap-8 sm:flex-row sm:items-center sm:gap-10">
           {/* A donut rather than another stacked bar: the hero already shows
               the same composition as a strip, and repeating it here would say
               nothing new. Hand-drawn in SVG — a charting library would be
@@ -210,6 +231,7 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
                   {segment.share.toFixed(0)}%
                 </span>
                 <span className="w-28 shrink-0 text-right text-sm font-medium tabular-nums text-foreground">
+                  {segment.items.some(item => item.subscription.amount_type === 'variable') ? '≈ ' : ''}
                   {formatCurrency(segment.total, baseCurrency)}
                 </span>
               </li>
@@ -219,7 +241,7 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
       )}
 
       {view === 'categories' && (
-        <ul className="mt-6 space-y-2">
+        <ul id="breakdown-panel-categories" role="tabpanel" aria-labelledby="breakdown-tab-categories" className="mt-6 space-y-2">
           {categories.map(entry => {
             const isOpen = expandedCategory === entry.category
             return (
@@ -228,7 +250,7 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
                   type="button"
                   aria-expanded={isOpen}
                   onClick={() => setExpandedCategory(isOpen ? null : entry.category)}
-                  className="w-full rounded-xl px-3 py-3 text-left transition-colors hover:bg-muted/60"
+                  className="w-full rounded-xl px-1 py-3 text-left transition-colors hover:bg-muted/60 sm:px-3"
                 >
                   <div className="flex items-center gap-3">
                     <span
@@ -239,13 +261,14 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
                     <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
                       {formatCategory(entry.category)}
                     </span>
-                    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                    <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground sm:inline">
                       {entry.items.length} item{entry.items.length === 1 ? '' : 's'}
                     </span>
-                    <span className="w-10 shrink-0 text-right text-sm tabular-nums text-muted-foreground">
+                    <span className="hidden w-10 shrink-0 text-right text-sm tabular-nums text-muted-foreground sm:inline">
                       {entry.share.toFixed(0)}%
                     </span>
-                    <span className="w-28 shrink-0 text-right text-sm font-semibold tabular-nums text-foreground">
+                    <span className="shrink-0 text-right text-sm font-semibold tabular-nums text-foreground sm:w-28">
+                      {entry.items.some(item => item.subscription.amount_type === 'variable') ? '≈ ' : ''}
                       {formatCurrency(entry.total, baseCurrency)}
                       <span className="font-normal text-muted-foreground">/mo</span>
                     </span>
@@ -278,6 +301,7 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
                           {subscription.name}
                         </span>
                         <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
+                          {subscription.amount_type === 'variable' ? '≈ ' : ''}
                           {formatCurrency(monthly, baseCurrency)}/mo
                         </span>
                       </li>
@@ -291,9 +315,9 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
       )}
 
       {view === 'payments' && (
-        <div className="mt-6">
+        <div id="breakdown-panel-payments" role="tabpanel" aria-labelledby="breakdown-tab-payments" className="mt-6">
           <ul className="divide-y divide-border">
-            {visiblePayments.map(({ subscription, monthly }) => {
+            {visiblePayments.map(({ subscription, monthly, yearly }) => {
               const share = monthlyTotal > 0 ? (monthly / monthlyTotal) * 100 : 0
               return (
                 <li key={subscription.id} className="flex items-center gap-3 py-3">
@@ -307,18 +331,19 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency }: Props) {
                       {subscription.name}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
-                      {formatCategory(subscription.category)} · {subscription.cycle}
+                      {formatCategory(subscription.category)} · {cadenceLabel(subscription)}
                       {subscription.currency !== baseCurrency &&
                         ` · ${formatCurrency(subscription.amount, subscription.currency)}`}
                     </p>
                   </div>
                   <div className="shrink-0 text-right">
                     <p className="text-sm font-semibold tabular-nums text-foreground">
+                      {subscription.amount_type === 'variable' ? '≈ ' : ''}
                       {formatCurrency(monthly, baseCurrency)}
                       <span className="font-normal text-muted-foreground">/mo</span>
                     </p>
                     <p className="text-xs tabular-nums text-muted-foreground">
-                      {share.toFixed(0)}% · {formatCurrency(monthly * 12, baseCurrency)}/yr
+                      {share.toFixed(0)}% · {formatCurrency(yearly, baseCurrency)}/yr
                     </p>
                   </div>
                 </li>

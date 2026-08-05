@@ -196,22 +196,40 @@ export function AgentWorkspace({
   } | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const skipNextMessageLoadRef = useRef<string | null>(null)
+  const activeThreadRef = useRef(activeThreadId)
+  const threadLoadRef = useRef(0)
+  const streamBusyRef = useRef(false)
+  const threadCreateBusyRef = useRef(false)
+  const actionBusyRef = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  const selectActiveThread = useCallback((id: string) => {
+    activeThreadRef.current = id
+    setActiveThreadId(id)
+  }, [setActiveThreadId])
+
+  const clearSelectedThread = useCallback(() => {
+    activeThreadRef.current = ''
+    clearActiveThreadId()
+  }, [clearActiveThreadId])
+
   const loadThreads = useCallback(async (preferredId?: string) => {
+    const requestId = ++threadLoadRef.current
     try {
       const token = await tokenProvider()
       const result = await listAgentThreads(token, showArchived)
+      if (requestId !== threadLoadRef.current) return
       setThreads(result)
       const wanted = preferredId ?? activeThreadId
       if (wanted && result.some(thread => thread.id === wanted)) return
-      if (result[0]) setActiveThreadId(result[0].id)
-      else clearActiveThreadId()
+      if (result[0]) selectActiveThread(result[0].id)
+      else clearSelectedThread()
     } catch (error) {
+      if (requestId !== threadLoadRef.current) return
       setLoadError(error instanceof Error ? error.message : 'Could not load conversations.')
     }
-  }, [activeThreadId, clearActiveThreadId, setActiveThreadId, showArchived, tokenProvider])
+  }, [activeThreadId, clearSelectedThread, selectActiveThread, showArchived, tokenProvider])
 
   const loadMessages = useCallback(async (
     threadId: string,
@@ -220,6 +238,7 @@ export function AgentWorkspace({
     silent = false
   ) => {
     if (!threadId) {
+      activeThreadRef.current = ''
       setMessages([])
       setLoadingHistory(false)
       return
@@ -228,16 +247,23 @@ export function AgentWorkspace({
     try {
       const token = await tokenProvider()
       const page = await listAgentMessages(token, threadId, before)
+      if (activeThreadRef.current !== threadId) return
       setMessages(current => prepend
-        ? [...page.messages, ...current]
+        ? [
+            ...page.messages.filter(
+              message => !current.some(existing => existing.id === message.id),
+            ),
+            ...current,
+          ]
         : page.messages)
       setHasMore(page.has_more)
       setNextBefore(page.next_before)
       setLoadError('')
     } catch (error) {
+      if (activeThreadRef.current !== threadId) return
       setLoadError(error instanceof Error ? error.message : 'Could not load this conversation.')
     } finally {
-      if (!silent) setLoadingHistory(false)
+      if (!silent && activeThreadRef.current === threadId) setLoadingHistory(false)
     }
   }, [tokenProvider])
 
@@ -246,6 +272,7 @@ export function AgentWorkspace({
   }, [loadThreads])
 
   useEffect(() => {
+    activeThreadRef.current = activeThreadId
     if (skipNextMessageLoadRef.current === activeThreadId) {
       skipNextMessageLoadRef.current = null
       return
@@ -275,14 +302,15 @@ export function AgentWorkspace({
   }, [draftRequest])
 
   async function newConversation(skipInitialMessageLoad = false) {
-    if (loading) return null
+    if (loading || threadCreateBusyRef.current) return null
+    threadCreateBusyRef.current = true
     try {
       const token = await tokenProvider()
       const thread = await createAgentThread(token)
       if (skipInitialMessageLoad) skipNextMessageLoadRef.current = thread.id
       setShowArchived(false)
       setThreads(current => [thread, ...current.filter(item => item.id !== thread.id)])
-      setActiveThreadId(thread.id)
+      selectActiveThread(thread.id)
       setMessages([])
       setShowHistory(false)
       setLoadError('')
@@ -291,6 +319,8 @@ export function AgentWorkspace({
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Could not start a conversation.')
       return null
+    } finally {
+      threadCreateBusyRef.current = false
     }
   }
 
@@ -338,11 +368,15 @@ export function AgentWorkspace({
 
   async function send() {
     const text = input.trim()
-    if (!text || loading) return
+    if (!text || loading || streamBusyRef.current) return
+    streamBusyRef.current = true
 
     let thread = threads.find(item => item.id === activeThreadId) ?? null
     if (!thread) thread = await newConversation(true)
-    if (!thread) return
+    if (!thread) {
+      streamBusyRef.current = false
+      return
+    }
 
     const threadId = thread.id
     const userId = `local-user-${crypto.randomUUID()}`
@@ -385,15 +419,21 @@ export function AgentWorkspace({
             }
           : message
       ))
+      // The server persists the user message and a failure/streaming
+      // placeholder before generating. Reconcile after a broken browser
+      // stream so history has the durable message id and Retry remains usable.
+      await Promise.all([loadMessages(threadId), loadThreads(threadId)])
     } finally {
       abortRef.current = null
+      streamBusyRef.current = false
       setLoading(false)
       setStatusText('')
     }
   }
 
   async function retry(message: AgentMessage) {
-    if (loading || !activeThreadId) return
+    if (loading || !activeThreadId || streamBusyRef.current) return
+    streamBusyRef.current = true
     const temporaryId = `local-retry-${crypto.randomUUID()}`
     setMessages(current => [
       ...current.filter(item => item.id !== message.id),
@@ -423,8 +463,10 @@ export function AgentWorkspace({
             }
           : item
       ))
+      await Promise.all([loadMessages(activeThreadId), loadThreads(activeThreadId)])
     } finally {
       abortRef.current = null
+      streamBusyRef.current = false
       setLoading(false)
       setStatusText('')
     }
@@ -447,7 +489,7 @@ export function AgentWorkspace({
     try {
       const token = await tokenProvider()
       await updateAgentThread(token, thread.id, { archived: !thread.archived })
-      if (thread.id === activeThreadId) clearActiveThreadId()
+      if (thread.id === activeThreadId) clearSelectedThread()
       await loadThreads()
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Could not update the conversation.')
@@ -459,7 +501,7 @@ export function AgentWorkspace({
     try {
       const token = await tokenProvider()
       await deleteAgentThread(token, deleteTarget.id)
-      if (deleteTarget.id === activeThreadId) clearActiveThreadId()
+      if (deleteTarget.id === activeThreadId) clearSelectedThread()
       setDeleteTarget(null)
       await loadThreads()
     } catch (error) {
@@ -477,7 +519,8 @@ export function AgentWorkspace({
   }
 
   async function confirmAction(action: AgentAction) {
-    if (actionBusy) return
+    if (actionBusy || actionBusyRef.current) return
+    actionBusyRef.current = true
     setActionBusy({ id: action.id, kind: 'confirm' })
     setLoadError('')
     try {
@@ -491,12 +534,14 @@ export function AgentWorkspace({
       setLoadError(error instanceof Error ? error.message : 'Could not apply this action.')
       if (activeThreadId) await loadMessages(activeThreadId, null, false, true)
     } finally {
+      actionBusyRef.current = false
       setActionBusy(null)
     }
   }
 
   async function rejectAction(action: AgentAction) {
-    if (actionBusy) return
+    if (actionBusy || actionBusyRef.current) return
+    actionBusyRef.current = true
     setActionBusy({ id: action.id, kind: 'reject' })
     setLoadError('')
     try {
@@ -505,6 +550,7 @@ export function AgentWorkspace({
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Could not dismiss this action.')
     } finally {
+      actionBusyRef.current = false
       setActionBusy(null)
     }
   }
@@ -632,7 +678,7 @@ export function AgentWorkspace({
                           type="button"
                           disabled={loading}
                           onClick={() => {
-                            setActiveThreadId(thread.id)
+                            selectActiveThread(thread.id)
                             if (variant === 'panel') setShowHistory(false)
                           }}
                           className="min-w-0 flex-1 rounded-md px-1.5 py-1 text-left disabled:opacity-50"
@@ -772,6 +818,7 @@ export function AgentWorkspace({
                     key={action.id}
                     action={action}
                     busy={actionBusy?.id === action.id ? actionBusy.kind : null}
+                    disabled={actionBusy !== null && actionBusy.id !== action.id}
                     onConfirm={confirmAction}
                     onReject={rejectAction}
                   />

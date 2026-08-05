@@ -14,33 +14,50 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
+    AmountType,
     AgentAction,
     AgentMessage,
+    AgentResearchCache,
     BillingCycle,
     Category,
     ChangeKind,
     DetectedSubscription,
     DetectionStatus,
     PaymentReminder,
+    PaymentStatus,
+    RecurrenceUnit,
+    SpendingType,
     Subscription,
     SubscriptionChange,
     UserPreference,
 )
 from app.routers.subscriptions import (
     log_change,
-    monthly_equivalent,
-    rebill,
-    resolve_split,
     retarget_detection_links,
+)
+from app.routers.detected import ApproveOverrides, apply_approval
+from app.routers.rates import conversion_for_storage
+from app.services.recurrence import (
+    Cadence,
+    cadence_for,
+    cadence_label,
+    effective_status,
+    legacy_cycle_for,
+    monthly_equivalent,
 )
 from app.services.reminders import reminder_occurrence
 from app.services.schedules import utc_naive
 from app.services.trials import sync_trial_reminder
+from app.services.duplicates import (
+    canonical_duplicate_pair,
+    delete_duplicate_dismissals_for_subscription,
+    persist_duplicate_dismissal,
+)
 
 
 ACTION_EXPIRES_AFTER = timedelta(hours=24)
@@ -60,7 +77,9 @@ def _enum(value):
 
 
 class StrictAction(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid", str_strip_whitespace=True, allow_inf_nan=False,
+    )
 
 
 class AddPayment(StrictAction):
@@ -68,9 +87,42 @@ class AddPayment(StrictAction):
     category: Category
     amount: float = Field(gt=0)
     currency: str = Field(min_length=3, max_length=3)
-    cycle: BillingCycle
+    # ``cycle`` accepts pending proposals created before flexible cadence.
+    cycle: BillingCycle | None = None
+    interval_unit: RecurrenceUnit | None = None
+    interval_count: int | None = Field(default=None, ge=1, le=1200)
     next_due: datetime | None = None
     trial_ends_at: datetime | None = None
+    recurrence_end_at: datetime | None = None
+    status: PaymentStatus = PaymentStatus.active
+    paused_until: datetime | None = None
+    cancellation_effective_at: datetime | None = None
+    amount_type: AmountType = AmountType.fixed
+    spending_type: SpendingType = SpendingType.unspecified
+
+    @field_validator("currency")
+    @classmethod
+    def valid_currency(cls, value: str) -> str:
+        value = value.upper()
+        if not value.isalpha():
+            raise ValueError("Currency must be a three-letter ISO code")
+        return value
+
+    @model_validator(mode="after")
+    def valid_cadence(self):
+        if (self.interval_unit is None) != (self.interval_count is None):
+            raise ValueError("Billing interval unit and count must be provided together")
+        if self.interval_unit is None and self.cycle is None:
+            raise ValueError("A billing interval is required")
+        if self.status == PaymentStatus.cancelling and self.cancellation_effective_at is None:
+            raise ValueError("A cancelling payment needs its cancellation effective date")
+        if (
+            self.status == PaymentStatus.paused
+            and self.paused_until is not None
+            and utc_naive(self.paused_until).date() <= utcnow().date()
+        ):
+            raise ValueError("The pause-until date must be in the future")
+        return self
 
 
 class UpdatePayment(StrictAction):
@@ -80,14 +132,47 @@ class UpdatePayment(StrictAction):
     amount: float | None = Field(default=None, gt=0)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     cycle: BillingCycle | None = None
+    interval_unit: RecurrenceUnit | None = None
+    interval_count: int | None = Field(default=None, ge=1, le=1200)
     next_due: datetime | None = None
+    recurrence_end_at: datetime | None = None
+    status: PaymentStatus | None = None
+    paused_until: datetime | None = None
+    cancellation_effective_at: datetime | None = None
+    amount_type: AmountType | None = None
+    spending_type: SpendingType | None = None
+    # Null means "leave unchanged" in assistant tool payloads. Explicitly
+    # clearing a saved lifecycle date therefore uses this allow-listed field,
+    # which avoids every unrelated AI edit wiping dates accidentally.
+    clear_fields: list[Literal[
+        "next_due", "recurrence_end_at", "paused_until",
+        "cancellation_effective_at",
+    ]] = Field(default_factory=list, max_length=4)
+
+    @field_validator("currency")
+    @classmethod
+    def valid_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.upper()
+        if not value.isalpha():
+            raise ValueError("Currency must be a three-letter ISO code")
+        return value
 
     @model_validator(mode="after")
     def has_change(self):
-        values = self.model_dump(exclude={"subscription_id"})
-        if not any(value is not None for value in values.values()):
+        values = self.model_dump(exclude={"subscription_id", "clear_fields"})
+        if not any(value is not None for value in values.values()) and not self.clear_fields:
             raise ValueError("At least one field must be changed")
+        if (self.interval_unit is None) != (self.interval_count is None):
+            raise ValueError("Billing interval unit and count must be updated together")
         return self
+
+
+def _action_cadence(item: AddPayment | UpdatePayment) -> Cadence:
+    if item.interval_unit is not None and item.interval_count is not None:
+        return Cadence(_enum(item.interval_unit), item.interval_count)
+    return cadence_for(item.cycle)
 
 
 class RemovePayment(StrictAction):
@@ -102,6 +187,21 @@ class MergePayments(StrictAction):
     def different_records(self):
         if self.source_subscription_id == self.target_subscription_id:
             raise ValueError("A payment cannot be merged into itself")
+        return self
+
+
+class DismissDuplicateSuggestion(StrictAction):
+    subscription_id: UUID
+    possible_duplicate_id: UUID
+
+    @model_validator(mode="after")
+    def canonical_distinct_pair(self):
+        first, second = canonical_duplicate_pair(
+            self.subscription_id,
+            self.possible_duplicate_id,
+        )
+        self.subscription_id = first
+        self.possible_duplicate_id = second
         return self
 
 
@@ -121,8 +221,41 @@ class MarkTrial(StrictAction):
 
 class ApproveDetection(StrictAction):
     detection_id: UUID
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    category: Category | None = None
     amount: float | None = Field(default=None, gt=0)
+    interval_unit: RecurrenceUnit | None = None
+    interval_count: int | None = Field(default=None, ge=1, le=1200)
+    next_due: datetime | None = None
+    trial_ends_at: datetime | None = None
+    amount_type: AmountType | None = None
     duplicate_resolution: Literal["keep_both", "replace_existing"] | None = None
+    # Tool payload nulls mean "use the detection" for backward compatibility.
+    # Clearing inferred dates must therefore be an explicit, confirmation-gated
+    # instruction. Keep this allow-list deliberately narrower than the general
+    # payment update action: these are the only nullable detection fields that
+    # approval is allowed to erase.
+    clear_fields: list[Literal["next_due", "trial_ends_at"]] = Field(
+        default_factory=list,
+        max_length=2,
+    )
+
+    @model_validator(mode="after")
+    def valid_cadence_pair(self):
+        if (self.interval_unit is None) != (self.interval_count is None):
+            raise ValueError("Billing interval unit and count must be provided together")
+        if len(set(self.clear_fields)) != len(self.clear_fields):
+            raise ValueError("Each field can only be cleared once")
+        conflicts = [
+            field_name
+            for field_name in self.clear_fields
+            if getattr(self, field_name) is not None
+        ]
+        if conflicts:
+            raise ValueError(
+                f"Cannot both set and clear {', '.join(conflicts)}"
+            )
+        return self
 
 
 class DismissDetection(StrictAction):
@@ -138,6 +271,7 @@ ACTION_MODELS: dict[str, type[StrictAction]] = {
     "propose_update_recurring_payment": UpdatePayment,
     "propose_remove_recurring_payment": RemovePayment,
     "propose_merge_recurring_payments": MergePayments,
+    "propose_dismiss_duplicate_suggestion": DismissDuplicateSuggestion,
     "propose_add_payment_reminder": AddReminder,
     "propose_mark_payment_as_free_trial": MarkTrial,
     "propose_approve_inbox_detection": ApproveDetection,
@@ -161,11 +295,29 @@ ACTION_TOOL_DEFINITIONS = [
                 "category": {"type": "string", "enum": [item.value for item in Category]},
                 "amount": {"type": "number", "exclusiveMinimum": 0},
                 "currency": {"type": "string", "minLength": 3, "maxLength": 3},
-                "cycle": {"type": "string", "enum": [item.value for item in BillingCycle]},
+                "interval_unit": {
+                    "type": "string", "enum": [item.value for item in RecurrenceUnit],
+                },
+                "interval_count": {"type": "integer", "minimum": 1, "maximum": 1200},
                 "next_due": {"type": ["string", "null"], "format": "date-time"},
                 "trial_ends_at": {"type": ["string", "null"], "format": "date-time"},
+                "recurrence_end_at": {"type": ["string", "null"], "format": "date-time"},
+                "status": {"type": "string", "enum": [item.value for item in PaymentStatus]},
+                "paused_until": {"type": ["string", "null"], "format": "date-time"},
+                "cancellation_effective_at": {
+                    "type": ["string", "null"], "format": "date-time",
+                },
+                "amount_type": {"type": "string", "enum": [item.value for item in AmountType]},
+                "spending_type": {
+                    "type": "string", "enum": [item.value for item in SpendingType],
+                },
             },
-            "required": ["name", "category", "amount", "currency", "cycle", "next_due", "trial_ends_at"],
+            "required": [
+                "name", "category", "amount", "currency", "interval_unit",
+                "interval_count", "next_due", "trial_ends_at", "recurrence_end_at",
+                "status", "paused_until", "cancellation_effective_at", "amount_type",
+                "spending_type",
+            ],
             "additionalProperties": False,
         },
     },
@@ -180,10 +332,50 @@ ACTION_TOOL_DEFINITIONS = [
                 "category": {"type": ["string", "null"], "enum": [item.value for item in Category] + [None]},
                 "amount": {"type": ["number", "null"], "exclusiveMinimum": 0},
                 "currency": {"type": ["string", "null"], "minLength": 3, "maxLength": 3},
-                "cycle": {"type": ["string", "null"], "enum": [item.value for item in BillingCycle] + [None]},
+                "interval_unit": {
+                    "type": ["string", "null"],
+                    "enum": [item.value for item in RecurrenceUnit] + [None],
+                },
+                "interval_count": {
+                    "type": ["integer", "null"], "minimum": 1, "maximum": 1200,
+                },
                 "next_due": {"type": ["string", "null"], "format": "date-time"},
+                "recurrence_end_at": {"type": ["string", "null"], "format": "date-time"},
+                "status": {
+                    "type": ["string", "null"],
+                    "enum": [item.value for item in PaymentStatus] + [None],
+                },
+                "paused_until": {"type": ["string", "null"], "format": "date-time"},
+                "cancellation_effective_at": {
+                    "type": ["string", "null"], "format": "date-time",
+                },
+                "amount_type": {
+                    "type": ["string", "null"],
+                    "enum": [item.value for item in AmountType] + [None],
+                },
+                "spending_type": {
+                    "type": ["string", "null"],
+                    "enum": [item.value for item in SpendingType] + [None],
+                },
+                "clear_fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "next_due", "recurrence_end_at", "paused_until",
+                            "cancellation_effective_at",
+                        ],
+                    },
+                    "maxItems": 4,
+                    "uniqueItems": True,
+                },
             },
-            "required": ["subscription_id", "name", "category", "amount", "currency", "cycle", "next_due"],
+            "required": [
+                "subscription_id", "name", "category", "amount", "currency",
+                "interval_unit", "interval_count", "next_due", "recurrence_end_at",
+                "status", "paused_until", "cancellation_effective_at", "amount_type",
+                "spending_type", "clear_fields",
+            ],
             "additionalProperties": False,
         },
     },
@@ -213,6 +405,23 @@ ACTION_TOOL_DEFINITIONS = [
                 "target_subscription_id": {"type": "string", "format": "uuid"},
             },
             "required": ["source_subscription_id", "target_subscription_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "propose_dismiss_duplicate_suggestion",
+        "description": (
+            "Prepare marking two owned tracked payments as intentionally different. "
+            "Confirmation hides this pair from future duplicate suggestions without "
+            "changing or deleting either payment."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subscription_id": {"type": "string", "format": "uuid"},
+                "possible_duplicate_id": {"type": "string", "format": "uuid"},
+            },
+            "required": ["subscription_id", "possible_duplicate_id"],
             "additionalProperties": False,
         },
     },
@@ -262,13 +471,51 @@ ACTION_TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "detection_id": {"type": "string", "format": "uuid"},
+                "name": {"type": ["string", "null"], "minLength": 1, "maxLength": 200},
+                "category": {
+                    "type": ["string", "null"],
+                    "enum": [item.value for item in Category] + [None],
+                },
                 "amount": {"type": ["number", "null"], "exclusiveMinimum": 0},
+                "interval_unit": {
+                    "type": ["string", "null"],
+                    "enum": [item.value for item in RecurrenceUnit] + [None],
+                },
+                "interval_count": {
+                    "type": ["integer", "null"], "minimum": 1, "maximum": 1200,
+                },
+                "next_due": {"type": ["string", "null"], "format": "date-time"},
+                "trial_ends_at": {
+                    "type": ["string", "null"], "format": "date-time",
+                },
+                "amount_type": {
+                    "type": ["string", "null"],
+                    "enum": [item.value for item in AmountType] + [None],
+                },
                 "duplicate_resolution": {
                     "type": ["string", "null"],
                     "enum": ["keep_both", "replace_existing", None],
                 },
+                "clear_fields": {
+                    "type": "array",
+                    "description": (
+                        "Dates to clear explicitly after confirmation. A null date leaves "
+                        "the inbox detection unchanged; use this field only when the user "
+                        "asked to remove a stale next-due or trial-end date."
+                    ),
+                    "items": {
+                        "type": "string",
+                        "enum": ["next_due", "trial_ends_at"],
+                    },
+                    "maxItems": 2,
+                    "uniqueItems": True,
+                },
             },
-            "required": ["detection_id", "amount", "duplicate_resolution"],
+            "required": [
+                "detection_id", "name", "category", "amount", "interval_unit",
+                "interval_count", "next_due", "trial_ends_at", "amount_type",
+                "duplicate_resolution", "clear_fields",
+            ],
             "additionalProperties": False,
         },
     },
@@ -295,49 +542,85 @@ ACTION_TOOL_DEFINITIONS = [
 ]
 
 
-def _owned_subscription(db: Session, user_id: str, identifier: UUID) -> Subscription:
-    row = db.query(Subscription).filter(
+def _owned_subscription(
+    db: Session,
+    user_id: str,
+    identifier: UUID,
+    *,
+    for_update: bool = False,
+) -> Subscription:
+    query = db.query(Subscription).filter(
         Subscription.id == identifier,
         Subscription.user_id == user_id,
         Subscription.is_active == True,  # noqa: E712
-    ).first()
+    )
+    if for_update:
+        query = query.with_for_update()
+    row = query.first()
     if not row:
         raise HTTPException(status_code=404, detail="Recurring payment not found")
     return row
 
 
-def _owned_detection(db: Session, user_id: str, identifier: UUID) -> DetectedSubscription:
-    row = db.query(DetectedSubscription).filter(
+def _owned_detection(
+    db: Session,
+    user_id: str,
+    identifier: UUID,
+    *,
+    for_update: bool = False,
+) -> DetectedSubscription:
+    query = db.query(DetectedSubscription).filter(
         DetectedSubscription.id == identifier,
         DetectedSubscription.user_id == user_id,
         DetectedSubscription.status == DetectionStatus.pending,
-    ).first()
+    )
+    if for_update:
+        query = query.with_for_update()
+    row = query.first()
     if not row:
         raise HTTPException(status_code=404, detail="Pending inbox detection not found")
     return row
 
 
-def _owned_reminder(db: Session, user_id: str, identifier: UUID) -> PaymentReminder:
-    row = db.query(PaymentReminder).filter(
+def _owned_reminder(
+    db: Session,
+    user_id: str,
+    identifier: UUID,
+    *,
+    for_update: bool = False,
+) -> PaymentReminder:
+    query = db.query(PaymentReminder).filter(
         PaymentReminder.id == identifier,
         PaymentReminder.user_id == user_id,
         PaymentReminder.is_active == True,  # noqa: E712
-    ).first()
+    )
+    if for_update:
+        query = query.with_for_update()
+    row = query.first()
     if not row:
         raise HTTPException(status_code=404, detail="Active reminder not found")
     return row
 
 
 def _subscription_snapshot(row: Subscription) -> dict:
+    cadence = cadence_for(row)
     return {
         "id": str(row.id),
         "name": row.name,
         "amount": row.amount,
         "currency": row.currency,
         "cycle": _enum(row.cycle),
+        "interval_unit": cadence.unit,
+        "interval_count": cadence.count,
         "category": _enum(row.category),
         "next_due": _iso(row.next_due),
+        "recurrence_end_at": _iso(row.recurrence_end_at),
         "trial_ends_at": _iso(row.trial_ends_at),
+        "status": row.status or "active",
+        "paused_until": _iso(row.paused_until),
+        "cancellation_effective_at": _iso(row.cancellation_effective_at),
+        "amount_type": row.amount_type or "fixed",
+        "spending_type": row.spending_type or "unspecified",
         "is_active": bool(row.is_active),
     }
 
@@ -349,6 +632,11 @@ def _detection_snapshot(row: DetectedSubscription) -> dict:
         "amount": row.amount,
         "currency": row.currency,
         "cycle": _enum(row.cycle),
+        "interval_unit": row.interval_unit,
+        "interval_count": row.interval_count,
+        "cadence_confidence": row.cadence_confidence,
+        "next_due": _iso(row.next_due),
+        "amount_type": row.amount_type or "fixed",
         "trial_ends_at": _iso(row.trial_ends_at),
         "status": _enum(row.status),
     }
@@ -375,8 +663,14 @@ def _proposal_copy(tool_name: str, data: StrictAction, db: Session, user_id: str
         assert isinstance(item, AddPayment)
         if item.trial_ends_at and utc_naive(item.trial_ends_at).date() < utcnow().date():
             raise HTTPException(status_code=422, detail="The trial end date has already passed")
+        cadence = _action_cadence(item)
         summary = f"Add {item.name}"
-        description = f"Track {item.currency.upper()} {item.amount:.2f} per {item.cycle.value}."
+        description = (
+            f"Track {item.currency.upper()} {item.amount:.2f} "
+            f"{cadence_label(cadence.unit, cadence.count).lower()}."
+        )
+        if item.amount_type == AmountType.variable:
+            description += " The saved amount is an estimate for a variable bill."
         if item.trial_ends_at:
             description += f" Free trial ends {_iso(item.trial_ends_at)[:10]}; a 7-day dashboard reminder will be added."
     elif tool_name == "propose_update_recurring_payment":
@@ -387,9 +681,12 @@ def _proposal_copy(tool_name: str, data: StrictAction, db: Session, user_id: str
         summary = f"Update {sub.name}"
         changed = [
             key.replace("_", " ")
-            for key, value in item.model_dump(exclude={"subscription_id"}).items()
+            for key, value in item.model_dump(
+                exclude={"subscription_id", "clear_fields"},
+            ).items()
             if value is not None
         ]
+        changed.extend(f"clear {key.replace('_', ' ')}" for key in item.clear_fields)
         description = f"Change {', '.join(changed)} after confirmation."
     elif tool_name == "propose_remove_recurring_payment":
         item = data
@@ -409,19 +706,54 @@ def _proposal_copy(tool_name: str, data: StrictAction, db: Session, user_id: str
         }
         summary = f"Merge {source.name} into {target.name}"
         description = f"Keep {target.name}, move history and reminders to it, and remove the duplicate {source.name} record."
+    elif tool_name == "propose_dismiss_duplicate_suggestion":
+        item = data
+        assert isinstance(item, DismissDuplicateSuggestion)
+        first = _owned_subscription(db, user_id, item.subscription_id)
+        second = _owned_subscription(db, user_id, item.possible_duplicate_id)
+        expected = {
+            "source": _subscription_snapshot(first),
+            "target": _subscription_snapshot(second),
+        }
+        summary = f"Keep {first.name} and {second.name} separate"
+        description = (
+            "Remember that these are intentionally different and hide this pair "
+            "from future duplicate suggestions. Neither payment will be changed."
+        )
     elif tool_name == "propose_add_payment_reminder":
         item = data
         assert isinstance(item, AddReminder)
         sub = _owned_subscription(db, user_id, item.subscription_id)
-        target = item.target_date or (sub.trial_ends_at if item.kind == "trial_end" else sub.next_due)
-        if not target:
+        lifecycle = effective_status(sub)
+        if lifecycle in {PaymentStatus.cancelled.value, PaymentStatus.ended.value}:
+            raise HTTPException(
+                status_code=422,
+                detail="Cancelled or ended payments cannot have active reminders",
+            )
+        if (
+            lifecycle == PaymentStatus.paused.value
+            and not sub.paused_until
+            and item.target_date is None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Add a resume date or choose a fixed reminder date for this paused payment",
+            )
+        display_target = item.target_date or (
+            sub.trial_ends_at if item.kind == "trial_end" else sub.next_due
+        )
+        if not display_target:
             raise HTTPException(status_code=422, detail="This reminder needs a saved date")
-        if utc_naive(target).date() < utcnow().date():
+        if utc_naive(display_target).date() < utcnow().date():
             raise HTTPException(status_code=422, detail="The reminder date has already passed")
-        payload["target_date"] = _iso(target)
         expected = {"subscription": _subscription_snapshot(sub)}
         summary = f"Remind you about {sub.name}"
-        description = f"Show an in-app {item.kind.replace('_', ' ')} reminder {item.days_before} days before {_iso(target)[:10]}."
+        description = (
+            f"Show an in-app {item.kind.replace('_', ' ')} reminder "
+            f"{item.days_before} days before {_iso(display_target)[:10]}."
+        )
+        if item.target_date is None and item.kind != "trial_end":
+            description += " It will repeat with the saved payment cadence."
     elif tool_name == "propose_mark_payment_as_free_trial":
         item = data
         assert isinstance(item, MarkTrial)
@@ -435,9 +767,34 @@ def _proposal_copy(tool_name: str, data: StrictAction, db: Session, user_id: str
         item = data
         assert isinstance(item, ApproveDetection)
         detection = _owned_detection(db, user_id, item.detection_id)
+        clear_fields = set(item.clear_fields)
+        effective_trial_end = (
+            None
+            if "trial_ends_at" in clear_fields
+            else item.trial_ends_at or detection.trial_ends_at
+        )
+        if "next_due" in clear_fields and effective_trial_end is not None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "A trial end is also the next due date. Clear trial_ends_at as well, "
+                    "or keep the next due date."
+                ),
+            )
         amount = item.amount if item.amount is not None else detection.amount
         if amount is None or amount <= 0:
             raise HTTPException(status_code=422, detail="The price after this trial is needed before approval")
+        cadence_unit = _enum(item.interval_unit) if item.interval_unit else detection.interval_unit
+        cadence_count = item.interval_count or detection.interval_count
+        confidence = _enum(detection.cadence_confidence or "unknown")
+        if not cadence_unit or not cadence_count or (
+            confidence == "unknown" and item.interval_unit is None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Confirm how often this inbox finding repeats before approval",
+            )
+        cadence = Cadence(cadence_unit, cadence_count)
         expected = {"detection": _detection_snapshot(detection)}
         if detection.existing_subscription_id:
             tracked = _owned_subscription(db, user_id, detection.existing_subscription_id)
@@ -455,8 +812,20 @@ def _proposal_copy(tool_name: str, data: StrictAction, db: Session, user_id: str
                 similar = _owned_subscription(db, user_id, detection.similar_subscription_id)
                 expected["subscription"] = _subscription_snapshot(similar)
         summary = f"Approve {detection.merchant}"
-        description = f"Add or update this reviewed inbox finding at {detection.currency} {amount:.2f} per {_enum(detection.cycle)}."
-        if detection.trial_ends_at:
+        description = (
+            f"Add or update this reviewed inbox finding at "
+            f"{detection.currency} {amount:.2f} "
+            f"{cadence_label(cadence.unit, cadence.count).lower()}."
+        )
+        if item.amount_type == AmountType.variable or (
+            item.amount_type is None and _enum(detection.amount_type) == AmountType.variable.value
+        ):
+            description += " Its amount will be labelled as an estimate."
+        if "next_due" in clear_fields:
+            description += " Its saved next due date will be cleared."
+        if "trial_ends_at" in clear_fields:
+            description += " Its saved trial end and automatic dashboard reminder will be cleared."
+        elif effective_trial_end is not None:
             description += " Its trial end and automatic dashboard reminder will also be saved."
     elif tool_name == "propose_dismiss_inbox_detection":
         item = data
@@ -588,81 +957,215 @@ def actions_for_messages(
 
 
 def _assert_fresh(action: AgentAction, db: Session, user_id: str) -> None:
+    def matches(current: dict, stored: dict) -> bool:
+        # Pending actions from the previous release contain the legacy subset.
+        # Compare every key that was stored, without invalidating them merely
+        # because the current snapshot gained additive cadence fields.
+        return all(current.get(key) == value for key, value in stored.items())
+
     expected = action.expected_json or {}
+    # Detection approvals lock the review row before any tracked target, which
+    # matches the direct Review endpoint and prevents opposite lock ordering
+    # from deadlocking under concurrent UI/assistant confirmations.
+    if "detection" in expected:
+        detection = _owned_detection(
+            db, user_id, UUID(expected["detection"]["id"]), for_update=True,
+        )
+        if not matches(_detection_snapshot(detection), expected["detection"]):
+            raise HTTPException(status_code=409, detail="This inbox finding changed after the action was proposed.")
     if "subscription" in expected:
-        sub = _owned_subscription(db, user_id, UUID(expected["subscription"]["id"]))
+        sub = _owned_subscription(
+            db, user_id, UUID(expected["subscription"]["id"]), for_update=True,
+        )
         current = _subscription_snapshot(sub)
-        if current != expected["subscription"]:
+        if not matches(current, expected["subscription"]):
             raise HTTPException(status_code=409, detail="This payment changed after the action was proposed. Ask the assistant again.")
     if "source" in expected:
-        source = _owned_subscription(db, user_id, UUID(expected["source"]["id"]))
-        target = _owned_subscription(db, user_id, UUID(expected["target"]["id"]))
-        if _subscription_snapshot(source) != expected["source"] or _subscription_snapshot(target) != expected["target"]:
+        source_id = UUID(expected["source"]["id"])
+        target_id = UUID(expected["target"]["id"])
+        locked = {
+            row.id: row for row in db.query(Subscription).filter(
+                Subscription.user_id == user_id,
+                Subscription.is_active == True,  # noqa: E712
+                Subscription.id.in_([source_id, target_id]),
+            ).order_by(Subscription.id).with_for_update().all()
+        }
+        source, target = locked.get(source_id), locked.get(target_id)
+        if source is None or target is None:
+            raise HTTPException(status_code=404, detail="Recurring payment not found")
+        if not matches(_subscription_snapshot(source), expected["source"]) or not matches(
+            _subscription_snapshot(target), expected["target"]
+        ):
             raise HTTPException(status_code=409, detail="One of these payments changed after the merge was proposed.")
-    if "detection" in expected:
-        detection = _owned_detection(db, user_id, UUID(expected["detection"]["id"]))
-        if _detection_snapshot(detection) != expected["detection"]:
-            raise HTTPException(status_code=409, detail="This inbox finding changed after the action was proposed.")
     if "reminder" in expected:
-        reminder = _owned_reminder(db, user_id, UUID(expected["reminder"]["id"]))
-        if _reminder_snapshot(reminder) != expected["reminder"]:
+        reminder = _owned_reminder(
+            db, user_id, UUID(expected["reminder"]["id"]), for_update=True,
+        )
+        if not matches(_reminder_snapshot(reminder), expected["reminder"]):
             raise HTTPException(status_code=409, detail="This reminder changed after the action was proposed.")
 
 
 def _execute_add_payment(action: AgentAction, db: Session, user_id: str) -> dict:
     data = AddPayment.model_validate(action.payload_json)
+    cadence = _action_cadence(data)
     trial_end = utc_naive(data.trial_ends_at) if data.trial_ends_at else None
     next_due = trial_end or (utc_naive(data.next_due) if data.next_due else None)
     preference = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
     base = preference.base_currency if preference else "AUD"
+    currency = data.currency.upper()
+    converted, exchange_rate, _quality = conversion_for_storage(
+        data.amount, currency, base, db,
+    )
     sub = Subscription(
         id=uuid4(), user_id=user_id, name=data.name.strip(), category=data.category,
         amount=data.amount, full_amount=None, share_ratio=1.0, split_mode="full",
-        currency=data.currency.upper(), exchange_rate=1.0,
-        converted_amount=data.amount if data.currency.upper() == base else None,
-        cycle=data.cycle, next_due=next_due, trial_ends_at=trial_end, is_active=True,
+        currency=currency, exchange_rate=exchange_rate,
+        converted_amount=converted,
+        cycle=legacy_cycle_for(cadence.unit, cadence.count),
+        interval_unit=cadence.unit, interval_count=cadence.count,
+        next_due=next_due,
+        recurrence_end_at=(
+            utc_naive(data.recurrence_end_at) if data.recurrence_end_at else None
+        ),
+        trial_ends_at=trial_end,
+        status=_enum(data.status),
+        paused_until=utc_naive(data.paused_until) if data.paused_until else None,
+        cancellation_effective_at=(
+            utc_naive(data.cancellation_effective_at)
+            if data.cancellation_effective_at else None
+        ),
+        amount_type=_enum(data.amount_type), spending_type=_enum(data.spending_type),
+        is_active=data.status not in {PaymentStatus.cancelled, PaymentStatus.ended},
     )
+    if sub.recurrence_end_at and sub.next_due and (
+        sub.recurrence_end_at.date() < sub.next_due.date()
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="The recurrence end cannot be before the next payment",
+        )
+    if sub.status == PaymentStatus.cancelling.value and not sub.cancellation_effective_at:
+        raise HTTPException(
+            status_code=422,
+            detail="A cancelling payment needs its cancellation effective date",
+        )
     db.add(sub)
     db.flush()
     if trial_end:
         sync_trial_reminder(db, sub)
-    log_change(db, sub, ChangeKind.added, None, monthly_equivalent(sub.amount, sub.cycle))
-    return {"subscription_id": str(sub.id), "name": sub.name}
+    log_change(db, sub, ChangeKind.added, None, monthly_equivalent(sub.amount, sub))
+    return {
+        "subscription_id": str(sub.id), "name": sub.name,
+        "cadence": cadence_label(sub),
+    }
 
 
 def _execute_update_payment(action: AgentAction, db: Session, user_id: str) -> dict:
     data = UpdatePayment.model_validate(action.payload_json)
     sub = _owned_subscription(db, user_id, data.subscription_id)
-    before = monthly_equivalent(sub.amount, sub.cycle)
+    before = monthly_equivalent(sub.amount, sub)
+    before_currency = sub.currency
     fields = data.model_dump(exclude_unset=True)
     fields.pop("subscription_id", None)
+    clear_fields = set(fields.pop("clear_fields", []))
+    requested_unit = fields.pop("interval_unit", None)
+    requested_count = fields.pop("interval_count", None)
+    requested_cycle = fields.pop("cycle", None)
+    if requested_unit is not None and requested_count is not None:
+        cadence = Cadence(_enum(requested_unit), requested_count)
+        sub.interval_unit = cadence.unit
+        sub.interval_count = cadence.count
+        sub.cycle = legacy_cycle_for(cadence.unit, cadence.count)
+    elif requested_cycle is not None:
+        cadence = cadence_for(requested_cycle)
+        sub.interval_unit = cadence.unit
+        sub.interval_count = cadence.count
+        sub.cycle = legacy_cycle_for(cadence.unit, cadence.count)
+
+    date_fields = {
+        "next_due", "recurrence_end_at", "paused_until", "cancellation_effective_at",
+    }
+    for key in clear_fields:
+        setattr(sub, key, None)
     for key, value in fields.items():
-        if value is not None:
-            if key == "currency":
-                value = value.upper()
-            elif key == "next_due":
-                value = utc_naive(value)
-            setattr(sub, key, value)
-    if "currency" in fields or "amount" in fields:
+        if value is None:
+            continue
+        if key == "currency":
+            value = value.upper()
+        elif key in date_fields:
+            value = utc_naive(value)
+        elif hasattr(value, "value"):
+            value = value.value
+        setattr(sub, key, value)
+
+    if data.status is not None:
+        sub.is_active = data.status not in {
+            PaymentStatus.cancelled, PaymentStatus.ended,
+        }
+    if sub.recurrence_end_at and sub.next_due and (
+        sub.recurrence_end_at.date() < sub.next_due.date()
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="The recurrence end cannot be before the next payment",
+        )
+    if sub.status == PaymentStatus.cancelling.value and not sub.cancellation_effective_at:
+        raise HTTPException(
+            status_code=422,
+            detail="A cancelling payment needs its cancellation effective date",
+        )
+    if (
+        sub.status == PaymentStatus.paused.value
+        and sub.paused_until is not None
+        and sub.paused_until.date() <= utcnow().date()
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="The pause-until date must be in the future",
+        )
+    if data.currency is not None or data.amount is not None:
         preference = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
         base = preference.base_currency if preference else "AUD"
-        sub.converted_amount = sub.amount if sub.currency == base else None
-    after = monthly_equivalent(sub.amount, sub.cycle)
-    if after != before:
+        sub.converted_amount, sub.exchange_rate, _quality = conversion_for_storage(
+            sub.amount, sub.currency, base, db,
+        )
+    if not sub.is_active or sub.status in {
+        PaymentStatus.cancelled.value, PaymentStatus.ended.value,
+    }:
+        db.query(PaymentReminder).filter(
+            PaymentReminder.user_id == user_id,
+            PaymentReminder.subscription_id == sub.id,
+        ).update({PaymentReminder.is_active: False}, synchronize_session=False)
+    after = monthly_equivalent(sub.amount, sub)
+    if sub.currency != before_currency:
+        log_change(
+            db, sub, ChangeKind.removed, before, None,
+            currency=before_currency,
+        )
+        log_change(db, sub, ChangeKind.added, None, after)
+    elif after != before:
         log_change(db, sub, ChangeKind.price_change, before, after)
-    return {"subscription_id": str(sub.id), "name": sub.name}
+    return {
+        "subscription_id": str(sub.id), "name": sub.name,
+        "cadence": cadence_label(sub), "status": _enum(sub.status),
+    }
 
 
 def _execute_remove_payment(action: AgentAction, db: Session, user_id: str) -> dict:
     data = RemovePayment.model_validate(action.payload_json)
     sub = _owned_subscription(db, user_id, data.subscription_id)
     name = sub.name
-    log_change(db, sub, ChangeKind.removed, monthly_equivalent(sub.amount, sub.cycle), None)
+    log_change(db, sub, ChangeKind.removed, monthly_equivalent(sub.amount, sub), None)
     db.query(PaymentReminder).filter(
         PaymentReminder.user_id == user_id,
         PaymentReminder.subscription_id == sub.id,
     ).delete(synchronize_session=False)
     retarget_detection_links(db, user_id, sub.id, None)
+    db.query(AgentResearchCache).filter(
+        AgentResearchCache.user_id == user_id,
+        AgentResearchCache.subscription_id == sub.id,
+    ).delete(synchronize_session=False)
+    delete_duplicate_dismissals_for_subscription(db, user_id, sub.id)
     db.delete(sub)
     return {"subscription_id": str(data.subscription_id), "name": name, "merchant_cancelled": False}
 
@@ -700,31 +1203,77 @@ def _execute_merge(action: AgentAction, db: Session, user_id: str) -> dict:
             if reminder.is_active:
                 existing_keys.add(key)
     retarget_detection_links(db, user_id, source.id, target.id)
+    db.query(AgentResearchCache).filter(
+        AgentResearchCache.user_id == user_id,
+        AgentResearchCache.subscription_id == source.id,
+    ).delete(synchronize_session=False)
+    delete_duplicate_dismissals_for_subscription(db, user_id, source.id)
     db.delete(source)
     return {"removed_subscription_id": str(source.id), "subscription_id": str(target.id), "name": target.name}
+
+
+def _execute_dismiss_duplicate(
+    action: AgentAction,
+    db: Session,
+    user_id: str,
+) -> dict:
+    data = DismissDuplicateSuggestion.model_validate(action.payload_json)
+    first = _owned_subscription(db, user_id, data.subscription_id)
+    second = _owned_subscription(db, user_id, data.possible_duplicate_id)
+    row, created = persist_duplicate_dismissal(
+        db, user_id, first.id, second.id,
+    )
+    return {
+        "dismissed": True,
+        "already_dismissed": not created,
+        "subscription_ids": [
+            str(row.subscription_a_id), str(row.subscription_b_id),
+        ],
+    }
 
 
 def _execute_add_reminder(action: AgentAction, db: Session, user_id: str) -> dict:
     data = AddReminder.model_validate(action.payload_json)
     sub = _owned_subscription(db, user_id, data.subscription_id)
-    target = utc_naive(data.target_date) if data.target_date else None
-    if not target:
-        target = sub.trial_ends_at if data.kind == "trial_end" else sub.next_due
-    if not target or utc_naive(target).date() < utcnow().date():
+    lifecycle = effective_status(sub)
+    if lifecycle in {PaymentStatus.cancelled.value, PaymentStatus.ended.value}:
+        raise HTTPException(
+            status_code=422,
+            detail="Cancelled or ended payments cannot have active reminders",
+        )
+    if (
+        lifecycle == PaymentStatus.paused.value
+        and not sub.paused_until
+        and data.target_date is None
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Add a resume date or choose a fixed reminder date for this paused payment",
+        )
+    explicit_target = utc_naive(data.target_date) if data.target_date else None
+    # Trial deadlines are one-off. Renewal/cancellation reminders without an
+    # explicit target remain recurrence-based, so they advance next cycle.
+    stored_target = (
+        (explicit_target or sub.trial_ends_at)
+        if data.kind == "trial_end"
+        else explicit_target
+    )
+    validation_target = stored_target or sub.next_due
+    if not validation_target or utc_naive(validation_target).date() < utcnow().date():
         raise HTTPException(status_code=422, detail="The reminder needs a future date")
     duplicate = db.query(PaymentReminder).filter(
         PaymentReminder.user_id == user_id,
         PaymentReminder.subscription_id == sub.id,
         PaymentReminder.kind == data.kind,
         PaymentReminder.days_before == data.days_before,
-        PaymentReminder.target_date == utc_naive(target),
+        PaymentReminder.target_date == stored_target,
         PaymentReminder.is_active == True,  # noqa: E712
     ).first()
     if duplicate:
         return {"reminder_id": str(duplicate.id), "subscription_id": str(sub.id), "already_existed": True}
     reminder = PaymentReminder(
         id=uuid4(), user_id=user_id, subscription_id=sub.id, kind=data.kind,
-        days_before=data.days_before, target_date=utc_naive(target),
+        days_before=data.days_before, target_date=stored_target,
         note=data.note.strip() if data.note else None, is_active=True,
     )
     db.add(reminder)
@@ -739,12 +1288,14 @@ def _execute_mark_trial(action: AgentAction, db: Session, user_id: str) -> dict:
     if target.date() < utcnow().date():
         raise HTTPException(status_code=422, detail="The trial end date has already passed")
     if data.price_after_trial is not None:
-        before = monthly_equivalent(sub.amount, sub.cycle)
+        before = monthly_equivalent(sub.amount, sub)
         sub.amount = data.price_after_trial
         preference = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
         base = preference.base_currency if preference else "AUD"
-        sub.converted_amount = sub.amount if sub.currency == base else None
-        after = monthly_equivalent(sub.amount, sub.cycle)
+        sub.converted_amount, sub.exchange_rate, _quality = conversion_for_storage(
+            sub.amount, sub.currency, base, db,
+        )
+        after = monthly_equivalent(sub.amount, sub)
         if after != before:
             log_change(db, sub, ChangeKind.price_change, before, after)
     sub.trial_ends_at = target
@@ -757,64 +1308,28 @@ def _execute_mark_trial(action: AgentAction, db: Session, user_id: str) -> dict:
 def _execute_approve_detection(action: AgentAction, db: Session, user_id: str) -> dict:
     data = ApproveDetection.model_validate(action.payload_json)
     detection = _owned_detection(db, user_id, data.detection_id)
-    billed = data.amount if data.amount is not None else detection.amount
-    if billed <= 0:
-        raise HTTPException(status_code=422, detail="The price after this trial is needed")
-    split = resolve_split(billed)
-    target_id = detection.existing_subscription_id
-    if not target_id and data.duplicate_resolution == "replace_existing":
-        target_id = detection.similar_subscription_id
-    if target_id:
-        sub = _owned_subscription(db, user_id, target_id)
-        before = monthly_equivalent(sub.amount, sub.cycle)
-        split = rebill(sub, billed)
-        sub.amount, sub.full_amount = split.amount, split.full_amount
-        sub.share_ratio, sub.split_mode = split.share_ratio, split.split_mode
-        if detection.merchant and len(detection.merchant) > len(sub.name):
-            sub.name = detection.merchant
-        sub.category, sub.cycle, sub.currency = detection.category, detection.cycle, detection.currency
-        preference = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
-        base = preference.base_currency if preference else "AUD"
-        sub.converted_amount = sub.amount if sub.currency == base else None
-        sub.source_domain, sub.source_key = detection.sender_domain, detection.product_key or sub.source_key
-        if detection.trial_ends_at:
-            sub.trial_ends_at = detection.trial_ends_at
-            sub.next_due = detection.trial_ends_at
-            sync_trial_reminder(db, sub)
-        elif sub.trial_ends_at and detection.charge_count > 0:
-            sub.trial_ends_at = None
-            sync_trial_reminder(db, sub)
-        after = monthly_equivalent(sub.amount, sub.cycle)
-        if after != before:
-            log_change(db, sub, ChangeKind.price_change, before, after)
-    else:
-        preference = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
-        base = preference.base_currency if preference else "AUD"
-        sub = Subscription(
-            id=uuid4(), user_id=user_id, name=detection.merchant,
-            category=detection.category, amount=split.amount,
-            full_amount=split.full_amount, share_ratio=split.share_ratio,
-            split_mode=split.split_mode, source_domain=detection.sender_domain,
-            source_key=detection.product_key or None, currency=detection.currency,
-            exchange_rate=1.0,
-            converted_amount=split.amount if detection.currency == base else None,
-            cycle=detection.cycle, next_due=detection.trial_ends_at,
-            trial_ends_at=detection.trial_ends_at, is_active=not detection.cancelled,
-        )
-        db.add(sub)
-        db.flush()
-        if sub.trial_ends_at and sub.is_active:
-            sync_trial_reminder(db, sub)
-        log_change(db, sub, ChangeKind.added, None, monthly_equivalent(sub.amount, sub.cycle))
-    if detection.cancelled:
-        sub.is_active = False
-        db.query(PaymentReminder).filter(
-            PaymentReminder.user_id == user_id,
-            PaymentReminder.subscription_id == sub.id,
-        ).update({PaymentReminder.is_active: False}, synchronize_session=False)
-    detection.status = DetectionStatus.approved
-    detection.resolved_at = utcnow()
-    return {"detection_id": str(detection.id), "subscription_id": str(sub.id)}
+    overrides: dict = {}
+    for key in (
+        "name", "category", "amount", "interval_unit", "interval_count",
+        "next_due", "trial_ends_at", "amount_type",
+    ):
+        value = getattr(data, key)
+        if value is not None:
+            overrides[key] = value
+    # Supplying an explicit None preserves Pydantic's fields-set information,
+    # which is how the shared Review approval path distinguishes "clear this"
+    # from the legacy meaning of an omitted/null override (keep the detection).
+    for key in data.clear_fields:
+        overrides[key] = None
+    if data.duplicate_resolution == "replace_existing":
+        overrides["replace_subscription_id"] = detection.similar_subscription_id
+    return apply_approval(
+        data.detection_id,
+        ApproveOverrides(**overrides),
+        user_id,
+        db,
+        commit=False,
+    )
 
 
 def _execute_dismiss_detection(action: AgentAction, db: Session, user_id: str) -> dict:
@@ -842,6 +1357,7 @@ EXECUTORS = {
     "update_recurring_payment": _execute_update_payment,
     "remove_recurring_payment": _execute_remove_payment,
     "merge_recurring_payments": _execute_merge,
+    "dismiss_duplicate_suggestion": _execute_dismiss_duplicate,
     "add_payment_reminder": _execute_add_reminder,
     "mark_payment_as_free_trial": _execute_mark_trial,
     "approve_inbox_detection": _execute_approve_detection,

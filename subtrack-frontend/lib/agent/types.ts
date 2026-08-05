@@ -1,3 +1,5 @@
+import type { Category } from '@/types'
+
 export interface AgentThread {
   id: string
   title: string
@@ -17,13 +19,14 @@ export type AgentPage =
 
 export interface AgentPageFilters {
   search?: string
-  category?: 'streaming' | 'software' | 'cloud' | 'utilities' | 'fitness' | 'food' | 'transport' | 'other'
+  category?: Category
   due_period?: 'all' | 'day' | 'week' | 'month'
   from_date?: string
   to_date?: string
   sort_order?: 'asc' | 'desc'
   group_by_category?: boolean
   review_status?: 'pending' | 'dismissed'
+  record_scope?: 'current' | 'paused' | 'history' | 'all'
 }
 
 export interface AgentPageContext {

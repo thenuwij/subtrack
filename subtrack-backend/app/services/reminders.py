@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models import PaymentReminder, Subscription
+from app.services.recurrence import effective_status, forecast_end_for
 from app.services.schedules import project_next_occurrence, utc_naive
 
 
@@ -21,9 +22,22 @@ def reminder_occurrence(
     subscription: Subscription,
     now: datetime,
 ) -> tuple[datetime | None, str]:
+    status = effective_status(subscription, now)
+    if status in {"cancelled", "ended"}:
+        return None, "inactive"
     if reminder.target_date:
         return utc_naive(reminder.target_date), "fixed_date"
-    return project_next_occurrence(subscription.next_due, subscription.cycle, now)
+    projection_start = now
+    if status == "paused":
+        if not subscription.paused_until:
+            return None, "paused"
+        projection_start = max(utc_naive(now), utc_naive(subscription.paused_until))
+    return project_next_occurrence(
+        subscription.next_due,
+        subscription,
+        projection_start,
+        recurrence_end_at=forecast_end_for(subscription),
+    )
 
 
 def reminder_payload(
@@ -39,7 +53,11 @@ def reminder_payload(
         and reminder.dismissed_for
         and utc_naive(reminder.dismissed_for) == target
     )
-    if not target:
+    if date_source in {"inactive", "ended"}:
+        state = "inactive"
+    elif date_source == "paused":
+        state = "paused"
+    elif not target:
         state = "needs_date"
     elif dismissed:
         state = "dismissed"
@@ -74,6 +92,7 @@ def get_owned_subscription(
     subscription_id: UUID,
     *,
     active_only: bool = True,
+    for_update: bool = False,
 ) -> Subscription | None:
     query = db.query(Subscription).filter(
         Subscription.id == subscription_id,
@@ -81,6 +100,8 @@ def get_owned_subscription(
     )
     if active_only:
         query = query.filter(Subscription.is_active == True)  # noqa: E712
+    if for_update:
+        query = query.with_for_update()
     return query.first()
 
 
@@ -120,6 +141,8 @@ def list_user_reminders(
         if not subscription:
             continue
         payload = reminder_payload(reminder, subscription, now)
+        if not include_inactive and payload["status"] in {"inactive", "paused"}:
+            continue
         if not include_dismissed and payload["status"] == "dismissed":
             continue
         target = datetime.fromisoformat(payload["target_at"].removesuffix("Z")) \
@@ -128,7 +151,10 @@ def list_user_reminders(
             continue
         payloads.append(payload)
 
-    priority = {"overdue": 0, "due": 1, "upcoming": 2, "needs_date": 3, "dismissed": 4}
+    priority = {
+        "overdue": 0, "due": 1, "upcoming": 2, "needs_date": 3,
+        "paused": 4, "inactive": 5, "dismissed": 6,
+    }
     payloads.sort(key=lambda item: (
         priority.get(item["status"], 9),
         item["target_at"] or "9999",

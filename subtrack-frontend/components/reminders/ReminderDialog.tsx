@@ -25,6 +25,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { cadenceLabel } from '@/lib/utils/recurrence'
+import {
+  dateAtNoonUtc,
+  formatStoredDate,
+  storedDateKey,
+  todayUtcDateKey,
+} from '@/lib/utils/dates'
 import {
   Select,
   SelectContent,
@@ -41,21 +48,16 @@ const KIND_LABEL: Record<ReminderKind, string> = {
 }
 
 function dateInputValue(value: string | null) {
-  if (!value) return ''
-  const date = new Date(value)
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  return storedDateKey(value)
 }
 
 function formatDate(value: string | null) {
   if (!value) return 'Date needed'
-  return new Intl.DateTimeFormat('en-AU', {
+  return formatStoredDate(value, {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
-  }).format(new Date(value))
+  })
 }
 
 async function accessToken() {
@@ -129,7 +131,7 @@ export function ReminderDialog({
           // Treat a date-only deadline as a calendar date. Noon UTC avoids the
           // common local-midnight conversion that silently stores the previous
           // day for users east of Greenwich.
-          ? { target_date: new Date(`${targetDate}T12:00:00Z`).toISOString() }
+          ? { target_date: dateAtNoonUtc(targetDate) }
           : {}),
         ...(note.trim() ? { note: note.trim() } : {}),
       })
@@ -281,7 +283,7 @@ export function ReminderDialog({
               <Input
                 id="reminder-trial-date"
                 type="date"
-                min={dateInputValue(new Date().toISOString())}
+                min={todayUtcDateKey()}
                 value={targetDate}
                 onChange={event => setTargetDate(event.target.value)}
               />
@@ -292,7 +294,7 @@ export function ReminderDialog({
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">
-              Uses the payment date already saved for this {subscription.cycle} payment: {' '}
+              Uses the payment date already saved for this {cadenceLabel(subscription).toLowerCase()} payment: {' '}
               <span className="font-medium text-foreground">{formatDate(subscription.next_due)}</span>.
             </p>
           )}

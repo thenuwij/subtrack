@@ -27,10 +27,10 @@ interface FilterBarProps {
 }
 
 const PERIODS: { value: Period; label: string }[] = [
-  { value: 'all',   label: 'All'   },
-  { value: 'day',   label: 'Day'   },
-  { value: 'week',  label: 'Week'  },
-  { value: 'month', label: 'Month' },
+  { value: 'all',   label: 'Any date' },
+  { value: 'day',   label: 'Today' },
+  { value: 'week',  label: 'Next 7 days' },
+  { value: 'month', label: 'This month' },
 ]
 
 export function FilterBar({
@@ -64,6 +64,7 @@ export function FilterBar({
         <div className="relative w-40 shrink-0">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
           <Input
+            aria-label="Search recurring payments"
             value={searchQuery}
             onChange={e => onSearchChange(e.target.value)}
             placeholder="Search…"
@@ -75,6 +76,8 @@ export function FilterBar({
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-muted-foreground shrink-0">Category</span>
           <button
+            type="button"
+            aria-pressed={selectedCategory === ''}
             onClick={() => onCategoryChange('')}
             className={`h-7 rounded-full px-3 text-xs font-medium transition-colors ${
               selectedCategory === ''
@@ -87,6 +90,8 @@ export function FilterBar({
           {categories.map(cat => (
             <button
               key={cat}
+              type="button"
+              aria-pressed={selectedCategory === cat}
               onClick={() => onCategoryChange(cat === selectedCategory ? '' : cat)}
               className={`h-7 rounded-full px-3 text-xs font-medium capitalize transition-colors ${
                 selectedCategory === cat
@@ -107,10 +112,12 @@ export function FilterBar({
         {/* Period toggle */}
         <div className="flex items-center gap-1.5">
           <span className="text-xs text-muted-foreground shrink-0">Period</span>
-          <div className="flex items-center rounded-lg bg-muted p-0.5 gap-0.5">
+          <div className="flex flex-wrap items-center rounded-lg bg-muted p-0.5 gap-0.5" role="group" aria-label="Expected payment date">
             {PERIODS.map(p => (
               <button
                 key={p.value}
+                type="button"
+                aria-pressed={period === p.value}
                 onClick={() => onPeriodChange(p.value)}
                 className={`h-6 rounded-md px-2.5 text-xs font-medium transition-colors ${
                   period === p.value
@@ -126,8 +133,9 @@ export function FilterBar({
 
         {/* From date */}
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-xs text-muted-foreground">From</span>
+          <label htmlFor="payment-filter-from" className="text-xs text-muted-foreground">From</label>
           <input
+            id="payment-filter-from"
             type="date"
             value={fromDate}
             onChange={e => onFromDateChange(e.target.value)}
@@ -137,8 +145,9 @@ export function FilterBar({
 
         {/* To date */}
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-xs text-muted-foreground">To</span>
+          <label htmlFor="payment-filter-to" className="text-xs text-muted-foreground">To</label>
           <input
+            id="payment-filter-to"
             type="date"
             value={toDate}
             onChange={e => onToDateChange(e.target.value)}
@@ -148,29 +157,32 @@ export function FilterBar({
 
         {/* Sort order */}
         <button
+          type="button"
           onClick={() => onSortOrderChange(sortOrder === 'desc' ? 'asc' : 'desc')}
           className={`flex items-center gap-1.5 h-8 rounded-lg px-3 text-xs font-medium transition-colors shrink-0 ${
             sortOrder === 'desc'
               ? 'bg-muted text-foreground'
               : 'bg-muted text-foreground'
           } hover:bg-muted/70`}
-          aria-label="Toggle sort order"
+          aria-label={`Sort by ${sortOrder === 'asc' ? 'latest' : 'soonest'} expected payment first`}
         >
           {sortOrder === 'desc'
-            ? <><ArrowDown className="w-3.5 h-3.5" /> Newest</>
-            : <><ArrowUp   className="w-3.5 h-3.5" /> Oldest</>
+            ? <><ArrowDown className="w-3.5 h-3.5" /> Latest</>
+            : <><ArrowUp   className="w-3.5 h-3.5" /> Soonest</>
           }
         </button>
 
         {/* Group by category */}
         <button
+          type="button"
+          aria-pressed={groupByCategory}
           onClick={() => onGroupByCategoryChange(!groupByCategory)}
           className={`flex items-center gap-1.5 h-8 rounded-lg px-3 text-xs font-medium transition-colors shrink-0 ${
             groupByCategory
               ? 'bg-primary/10 text-primary hover:bg-primary/15'
               : 'bg-muted text-muted-foreground hover:bg-muted/70'
           }`}
-          aria-label="Toggle group by category"
+          aria-label="Group payments by category"
         >
           <LayoutGrid className="w-3.5 h-3.5" />
           Group

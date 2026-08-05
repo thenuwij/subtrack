@@ -15,7 +15,10 @@ services:
     # Run schema work once per deploy, not once per horizontally scaled web
     # instance. This avoids startup DDL races under load.
     preDeployCommand: python scripts/migrate.py
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Uvicorn's default access log includes query strings. Gmail's OAuth
+    # callback carries a short-lived code and state in that query, so the app
+    # emits its own path-only request log instead.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-access-log
     maxShutdownDelaySeconds: 120
     # Readiness includes a real database round-trip so a deploy cannot look
     # healthy while every signed-in page is failing.
@@ -55,6 +58,10 @@ services:
       # The frontend origin. CORS blocks every request if this is wrong, and
       # the Gmail callback redirects back to the first entry.
       - key: ALLOWED_ORIGINS
+        value: https://subtrack-beryl.vercel.app
+      # Canonical browser URL for redirects and public links. Unlike the CORS
+      # setting above, this must always contain exactly one origin.
+      - key: FRONTEND_URL
         value: https://subtrack-beryl.vercel.app
 
       - key: ENVIRONMENT

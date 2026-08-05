@@ -15,17 +15,21 @@ import {
 import { createClient } from '@/lib/supabase/client'
 import {
   dismissReminder,
+  getDetected,
   getGmailStatus,
   getPreferences,
   getReminders,
   getSubscriptionChanges,
+  getSubscriptionForecast,
   getSubscriptions,
 } from '@/lib/api'
 import type {
   GmailStatus,
+  DetectedSubscription,
   PaymentReminder,
   Subscription,
   SubscriptionChange,
+  SubscriptionForecast,
 } from '@/types'
 import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
@@ -37,16 +41,13 @@ import { ReminderCenter } from '@/components/reminders/ReminderCenter'
 import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
 import { toast } from 'sonner'
 import { isActiveTrial } from '@/lib/utils/trials'
-
-// 52 weeks / 12 months. Using 4.33 loses ~0.04 of a week each month, which
-// compounds to a visibly short annual figure on a large weekly bill like rent.
-const WEEKS_PER_MONTH = 52 / 12
-
-function toMonthly(amount: number, cycle: string) {
-  if (cycle === 'weekly') return amount * WEEKS_PER_MONTH
-  if (cycle === 'yearly') return amount / 12
-  return amount
-}
+import {
+  contributesToCommitment,
+  monthlyEquivalentNative,
+  yearlyEquivalentNative,
+} from '@/lib/utils/recurrence'
+import { UpcomingCharges } from '@/components/dashboard/UpcomingCharges'
+import { NeedsAttention } from '@/components/dashboard/NeedsAttention'
 
 function formatDate(date: string) {
   return new Date(date).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
@@ -58,12 +59,20 @@ export default function DashboardPage() {
   const [monthlyIncome, setMonthlyIncome] = useState<number | null>(null)
   const [gmail, setGmail] = useState<GmailStatus | null>(null)
   const [reminders, setReminders] = useState<PaymentReminder[]>([])
+  const [pendingDetections, setPendingDetections] = useState<DetectedSubscription[]>([])
+  const [forecast, setForecast] = useState<SubscriptionForecast | null>(null)
+  const [forecastError, setForecastError] = useState('')
+  const [changesError, setChangesError] = useState('')
+  const [gmailScanStale, setGmailScanStale] = useState(false)
+  const [forecastRetrying, setForecastRetrying] = useState(false)
   const [reminderError, setReminderError] = useState('')
   const [remindersRetrying, setRemindersRetrying] = useState(false)
   const [changesExpanded, setChangesExpanded] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
-  const { baseCurrency, convertAmount } = useCurrency()
+  const {
+    baseCurrency, canConvert, convertAmount, ratesLoading, ratesStale, ratesAsOf,
+  } = useCurrency()
 
   const fetchData = useCallback(async () => {
     try {
@@ -72,14 +81,27 @@ export default function DashboardPage() {
       if (!session) return
 
       const token = session.access_token
-      const [subsResult, changesResult, preferencesResult, gmailStatus, reminderResult] = await Promise.all([
+      const [
+        subsResult,
+        changesResult,
+        preferencesResult,
+        gmailStatus,
+        reminderResult,
+        forecastResult,
+        detectionResult,
+      ] = await Promise.all([
         getSubscriptions(token)
           .then(rows => ({ rows, error: '' }))
           .catch(error => ({
             rows: null,
             error: error instanceof Error ? error.message : 'Could not load recurring payments.',
           })),
-        getSubscriptionChanges(token, 30).catch(() => null),
+        getSubscriptionChanges(token, 30)
+          .then(rows => ({ rows, error: '' }))
+          .catch(error => ({
+            rows: null,
+            error: error instanceof Error ? error.message : 'Could not load recent changes.',
+          })),
         getPreferences(token).catch(() => null),
         getGmailStatus(token).catch(() => null),
         getReminders(token, { horizonDays: 90 })
@@ -88,6 +110,13 @@ export default function DashboardPage() {
             rows: [],
             error: error instanceof Error ? error.message : 'Could not load reminders.',
           })),
+        getSubscriptionForecast(token, 30)
+          .then(value => ({ value, error: '' }))
+          .catch(error => ({
+            value: null,
+            error: error instanceof Error ? error.message : 'Could not calculate upcoming charges.',
+          })),
+        getDetected(token, 'pending').catch(() => []),
       ])
 
       if (subsResult.rows) {
@@ -96,11 +125,24 @@ export default function DashboardPage() {
       } else {
         setLoadError(subsResult.error)
       }
-      if (changesResult) setChanges(changesResult)
+      if (changesResult.rows) setChanges(changesResult.rows)
+      setChangesError(changesResult.error)
       if (preferencesResult) setMonthlyIncome(preferencesResult.monthly_income ?? null)
       setGmail(gmailStatus)
+      const lastScanTime = gmailStatus?.last_scanned_at
+        ? new Date(gmailStatus.last_scanned_at).getTime()
+        : Number.NaN
+      setGmailScanStale(Boolean(
+        gmailStatus?.connected
+        && gmailStatus.scan_status !== 'running'
+        && Number.isFinite(lastScanTime)
+        && Date.now() - lastScanTime > 30 * 24 * 60 * 60 * 1000,
+      ))
       setReminders(reminderResult.rows)
       setReminderError(reminderResult.error)
+      if (forecastResult.value) setForecast(forecastResult.value)
+      setForecastError(forecastResult.error)
+      setPendingDetections(detectionResult)
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Could not load your dashboard.')
     } finally {
@@ -117,6 +159,7 @@ export default function DashboardPage() {
 
   useRegisterAgentPageContext({
     visible_subscription_ids: subscriptions.slice(0, 25).map(subscription => subscription.id),
+    visible_detection_ids: pendingDetections.slice(0, 25).map(detection => detection.id),
     visible_reminder_ids: reminders.slice(0, 25).map(reminder => reminder.id),
   })
 
@@ -124,30 +167,54 @@ export default function DashboardPage() {
   // numbers on this page are actually comparable to each other.
   const ranked = useMemo(() => {
     return subscriptions
-      .filter(subscription => !isActiveTrial(subscription))
+      .filter(contributesToCommitment)
+      .filter(subscription => canConvert(subscription.currency))
       .map((s) => ({
         subscription: s,
-        monthly: convertAmount(toMonthly(s.amount, s.cycle), s.currency),
+        monthly: convertAmount(monthlyEquivalentNative(s), s.currency) ?? 0,
+        yearly: convertAmount(yearlyEquivalentNative(s), s.currency) ?? 0,
       }))
       .sort((a, b) => b.monthly - a.monthly)
-  }, [subscriptions, convertAmount])
+  }, [subscriptions, canConvert, convertAmount])
 
   const activeTrials = useMemo(
-    () => subscriptions.filter(subscription => isActiveTrial(subscription)),
+    () => subscriptions.filter(subscription =>
+      (subscription.status === 'active' || subscription.status === 'cancelling')
+      && isActiveTrial(subscription)
+    ),
     [subscriptions]
   )
+
+  const contributingPayments = useMemo(
+    () => subscriptions.filter(contributesToCommitment),
+    [subscriptions],
+  )
+
+  const unavailableCurrencies = contributingPayments.length - ranked.length
+  const hasVariableAmounts = ranked.some(entry => entry.subscription.amount_type === 'variable')
 
   const monthlyTotal = useMemo(
     () => ranked.reduce((sum, r) => sum + r.monthly, 0),
     [ranked]
   )
 
+  const yearlyTotal = useMemo(
+    () => ranked.reduce((sum, r) => sum + r.yearly, 0),
+    [ranked],
+  )
+
   const shareOfIncome =
     monthlyIncome && monthlyIncome > 0 ? (monthlyTotal / monthlyIncome) * 100 : null
 
+  const convertibleChanges = useMemo(
+    () => changes.filter(change => canConvert(change.currency)),
+    [changes, canConvert],
+  )
   const netChange = useMemo(
-    () => changes.reduce((sum, c) => sum + convertAmount(c.delta, c.currency), 0),
-    [changes, convertAmount]
+    () => convertibleChanges.reduce(
+      (sum, change) => sum + (convertAmount(change.delta, change.currency) ?? 0), 0,
+    ),
+    [convertibleChanges, convertAmount]
   )
 
   // The hero bar, in the same colours as the breakdown below it, so the two
@@ -193,7 +260,28 @@ export default function DashboardPage() {
     }
   }
 
-  if (loading) return <DashboardSkeleton />
+  async function retryForecast() {
+    setForecastRetrying(true)
+    try {
+      const { data: { session } } = await createClient().auth.getSession()
+      if (!session) throw new Error('Your session has expired.')
+      const next = await getSubscriptionForecast(session.access_token, 30)
+      setForecast(next)
+      setForecastError('')
+    } catch (error) {
+      setForecastError(error instanceof Error ? error.message : 'Could not calculate upcoming charges.')
+    } finally {
+      setForecastRetrying(false)
+    }
+  }
+
+  // Do not flash a base-currency-only subtotal while foreign exchange rates
+  // are still loading. If the rate request fails, ratesLoading still settles
+  // and the explicit exclusion message below takes over.
+  const needsForeignRates = subscriptions.some(
+    subscription => subscription.currency !== baseCurrency,
+  )
+  if (loading || (ratesLoading && needsForeignRates)) return <DashboardSkeleton />
 
   const hasPayments = subscriptions.length > 0
 
@@ -284,7 +372,7 @@ export default function DashboardPage() {
         <section>
           <div className="flex items-start justify-between gap-4">
             <p className="text-sm font-medium text-muted-foreground">
-              Your monthly commitment
+              {hasVariableAmounts ? 'Estimated monthly commitment' : 'Your monthly commitment'}
             </p>
             <Link
               href="/subscriptions"
@@ -295,15 +383,15 @@ export default function DashboardPage() {
           </div>
 
           <p className="mt-2 text-5xl font-semibold tracking-tight tabular-nums text-foreground sm:text-6xl">
-            {formatCurrency(monthlyTotal, baseCurrency)}
+            {hasVariableAmounts ? '≈ ' : ''}{formatCurrency(monthlyTotal, baseCurrency)}
           </p>
 
           <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-muted-foreground">
             <span className="tabular-nums">
-              {formatCurrency(monthlyTotal * 12, baseCurrency)} a year
+              {hasVariableAmounts ? '≈ ' : ''}{formatCurrency(yearlyTotal, baseCurrency)} annual equivalent
             </span>
             <span className="tabular-nums">
-              {ranked.length} paid payment{ranked.length === 1 ? '' : 's'}
+              {contributingPayments.length} paid payment{contributingPayments.length === 1 ? '' : 's'}
               {activeTrials.length > 0
                 ? ` · ${activeTrials.length} free trial${activeTrials.length === 1 ? '' : 's'}`
                 : ''}
@@ -341,6 +429,17 @@ export default function DashboardPage() {
               ))}
             </div>
           )}
+
+          {unavailableCurrencies > 0 ? (
+            <p className="mt-4 text-xs leading-5 text-amber-700 dark:text-amber-300">
+              {unavailableCurrencies} payment{unavailableCurrencies === 1 ? ' is' : 's are'} excluded from these totals because a reliable exchange rate is unavailable.
+            </p>
+          ) : null}
+          {ratesStale ? (
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+              Foreign-currency totals use the latest available cached rates{ratesAsOf ? ` from ${formatDate(ratesAsOf)}` : ''} and are estimates.
+            </p>
+          ) : null}
         </section>
 
         <ReminderCenter
@@ -364,6 +463,20 @@ export default function DashboardPage() {
             </Button>
           </section>
         ) : null}
+
+        <NeedsAttention
+          detections={pendingDetections}
+          forecast={forecast}
+          gmail={gmail}
+          gmailScanStale={gmailScanStale}
+        />
+
+        <UpcomingCharges
+          forecast={forecast}
+          error={forecastError}
+          retrying={forecastRetrying}
+          onRetry={() => void retryForecast()}
+        />
 
         {/* ── Inbox nudge — only while there's something to act on ─────── */}
         {gmail && !gmail.connected && (
@@ -393,6 +506,7 @@ export default function DashboardPage() {
           ranked={ranked}
           monthlyTotal={monthlyTotal}
           baseCurrency={baseCurrency}
+          unavailableCount={unavailableCurrencies}
         />
 
         {/* ── What changed ────────────────────────────────────────────── */}
@@ -401,10 +515,10 @@ export default function DashboardPage() {
             <div>
               <h2 className="text-base font-semibold text-foreground">What changed</h2>
               <p className="mt-0.5 text-sm text-muted-foreground">
-                Additions, price rises, and cancellations in the last 30 days.
+                Additions, price changes, and payments removed in the last 30 days.
               </p>
             </div>
-            {changes.length > 0 && netChange !== 0 && (
+            {convertibleChanges.length > 0 && netChange !== 0 && (
               <div className="shrink-0 text-right">
                 <p
                   className="text-sm font-semibold tabular-nums"
@@ -418,7 +532,15 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {changes.length === 0 ? (
+          {changesError ? (
+            <div className="mt-5 flex flex-col gap-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium text-foreground">Recent changes are unavailable</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">We won&apos;t guess that nothing changed.</p>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => void fetchData()}>Try again</Button>
+            </div>
+          ) : changes.length === 0 ? (
             <div className="mt-6 py-8 text-center">
               <p className="text-sm font-medium text-foreground">Nothing changed</p>
               <p className="mt-1 text-sm text-muted-foreground">
@@ -428,7 +550,10 @@ export default function DashboardPage() {
           ) : (
             <ul id="dashboard-changes-list" className="mt-4 divide-y divide-border">
               {(changesExpanded ? changes : changes.slice(0, 4)).map((change) => {
-                const delta = convertAmount(change.delta, change.currency)
+                const conversionAvailable = canConvert(change.currency)
+                const delta = conversionAvailable
+                  ? convertAmount(change.delta, change.currency) ?? 0
+                  : change.delta
                 const tone =
                   delta > 0 ? 'var(--increase)' : delta < 0 ? 'var(--decrease)' : undefined
 
@@ -457,15 +582,17 @@ export default function DashboardPage() {
                         {change.name}
                       </p>
                       <p className="truncate text-xs text-muted-foreground">
-                        {change.kind === 'added'
+                        {!conversionAvailable
+                          ? `${change.currency} conversion unavailable`
+                          : change.kind === 'added'
                           ? 'Added'
                           : change.kind === 'removed'
-                            ? 'Cancelled'
+                            ? 'Removed'
                             : `${formatCurrency(
-                                convertAmount(change.old_monthly ?? 0, change.currency),
+                                convertAmount(change.old_monthly ?? 0, change.currency) ?? 0,
                                 baseCurrency
                               )} → ${formatCurrency(
-                                convertAmount(change.new_monthly ?? 0, change.currency),
+                                convertAmount(change.new_monthly ?? 0, change.currency) ?? 0,
                                 baseCurrency
                               )}`}{' '}
                         · {formatDate(change.changed_at)}
@@ -477,7 +604,7 @@ export default function DashboardPage() {
                       style={{ color: tone ?? 'var(--muted-foreground)' }}
                     >
                       {delta > 0 ? '+' : delta < 0 ? '−' : ''}
-                      {formatCurrency(Math.abs(delta), baseCurrency)}/mo
+                      {formatCurrency(Math.abs(delta), conversionAvailable ? baseCurrency : change.currency)}/mo
                     </p>
                   </li>
                 )
@@ -501,6 +628,11 @@ export default function DashboardPage() {
               )}
             </ul>
           )}
+          {!ratesLoading && changes.some(change => change.currency !== baseCurrency) ? (
+            <p className="mt-3 text-xs leading-5 text-muted-foreground">
+              Foreign-currency changes are re-expressed using the currently loaded FX snapshot, so the displayed base-currency net can move with rates. Recorded native amounts do not change.
+            </p>
+          ) : null}
         </section>
       </div>
     </div>

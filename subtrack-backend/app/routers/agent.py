@@ -23,7 +23,7 @@ from app.agent.actions import (
 from app.config import settings
 from app.database import get_db
 from app.middleware.auth import verify_token
-from app.models import AgentAction, AgentMessage, AgentThread
+from app.models import AgentAction, AgentMessage, AgentThread, Category
 
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -40,13 +40,18 @@ MAX_AGENT_STEPS = 8
 MAX_CONTEXT_MESSAGES = 60
 STALE_STREAM_AFTER = timedelta(minutes=5)
 DEFAULT_THREAD_TITLE = "New conversation"
+AGENT_ATTEMPTS_PER_MINUTE = 10
 
 
 class ThreadCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: Optional[str] = Field(default=None, max_length=120)
 
 
 class ThreadUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: Optional[str] = Field(default=None, min_length=1, max_length=120)
     archived: Optional[bool] = None
 
@@ -57,16 +62,14 @@ class AgentPageFilters(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     search: Optional[str] = Field(default=None, max_length=120)
-    category: Optional[Literal[
-        "streaming", "software", "cloud", "utilities",
-        "fitness", "food", "transport", "other",
-    ]] = None
+    category: Optional[Category] = None
     due_period: Optional[Literal["all", "day", "week", "month"]] = None
     from_date: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     to_date: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     sort_order: Optional[Literal["asc", "desc"]] = None
     group_by_category: Optional[bool] = None
     review_status: Optional[Literal["pending", "dismissed"]] = None
+    record_scope: Optional[Literal["current", "paused", "history", "all"]] = None
 
 
 class AgentPageContext(BaseModel):
@@ -88,6 +91,8 @@ class AgentPageContext(BaseModel):
 
 
 class MessageCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     message: str = Field(min_length=1, max_length=8_000)
     client_message_id: str = Field(min_length=8, max_length=64)
     page_context: Optional[AgentPageContext] = None
@@ -292,7 +297,14 @@ Rules:
 - Removing a payment from Subtrack does not cancel it with the merchant. State this every time removal is proposed.
 - In-app dashboard reminders are available; email and push reminders are not. Never imply external delivery.
 - A free trial has a trial end date and a post-trial recurring price. Marking or adding one also prepares an automatic dashboard reminder 7 days before it ends.
-- The data covers tracked recurring commitments, not bank transactions or all spending. Say so when the distinction matters.
+- Cadence is interval_count + interval_unit. Say "every 2 months", never the ambiguous word "bimonthly". Every 4 weeks is not the same cadence as monthly.
+- A monthly or yearly equivalent is a normalized budgeting rate, not a claim that the amount is charged in that period. Use get_upcoming_charges for exact date-window forecasts; it returns every projected occurrence, so one payment may appear repeatedly.
+- The data covers tracked recurring commitments, not bank transactions or all spending. Subtrack does not currently store a complete charge ledger, so never describe forecasts or commitment-change records as actual historical spending.
+- Variable-payment amounts are estimates. Always label them as estimates and do not imply the next charge is guaranteed to match the saved amount.
+- Subtrack stores one current recurring amount, not a sequence of introductory price phases. Never encode an offer such as "$5 for 3 months, then $15" as though either figure applies forever. Explain this limitation; use the stable post-introductory price when the user confirms it, mark uncertain amounts as variable estimates, and use a reminder for the transition date when useful.
+- Paused payments without a resume date, and cancelled or ended payments, must not be included in future forecasts. A cancelling payment may remain until its effective date.
+- Unknown Gmail cadence, missing due dates, unknown post-trial prices, and incomplete currency conversion are missing data—not permission to guess. Explain the limitation and prepare a correction only after the user provides the value.
+- User-controlled essential/optional labels are context, not financial advice. Never override them or call an unlabeled payment optional.
 - Respect each tool's currency_conversion status. Label estimated values, and disclose incomplete aggregates instead of presenting them as exact.
 - Duplicate-record suggestions do not prove duplicate bank charges and always require user confirmation.
 - Use research_cheaper_alternatives only for current service alternatives, plan prices or market comparisons. First use a payment read tool to identify the exact owned record.
@@ -347,6 +359,10 @@ def _stream_reply(
         page_context = source.context_json if source else None
 
         for _ in range(MAX_AGENT_STEPS):
+            # A model response can take more than a minute. End any read-only
+            # transaction before waiting on Anthropic so a streaming request
+            # does not reserve one of Render's limited database connections.
+            db.commit()
             with client.messages.stream(
                 model="claude-sonnet-4-6",
                 max_tokens=1_500,
@@ -426,9 +442,13 @@ def _stream_reply(
                         )
                     content = json.dumps(result)
                     is_error = False
-                except Exception:
+                except Exception as exc:
                     db.rollback()
-                    logger.exception("Agent tool %s failed", block.name)
+                    # Tool validation errors can contain private amounts or
+                    # names. Log only the allow-listed tool and exception type.
+                    logger.error(
+                        "Agent tool %s failed (%s)", block.name, type(exc).__name__,
+                    )
                     content = json.dumps({"error": "The tool could not complete."})
                     is_error = True
                 tool_results.append({
@@ -445,7 +465,11 @@ def _stream_reply(
         raise
     except Exception as exc:
         code = _error_code(exc)
-        logger.exception("Agent response failed for thread %s", thread_id)
+        logger.error(
+            "Agent response failed for thread %s (%s)",
+            thread_id,
+            type(exc).__name__,
+        )
         try:
             _mark_failed(db, assistant_message_id, code)
         except Exception:
@@ -474,21 +498,32 @@ def _streaming_response(generator: Generator[str, None, None]) -> StreamingRespo
     )
 
 
+def _enforce_agent_rate_limit(db: Session, user_id: str) -> None:
+    """Bound model attempts per user using already-persisted placeholders.
+
+    This intentionally counts assistant attempts rather than HTTP requests, so
+    idempotent message replays do not consume capacity and retries do. The
+    durable count works across Render workers and restarts.
+    """
+    recent_attempts = db.query(func.count(AgentMessage.id)).filter(
+        AgentMessage.user_id == user_id,
+        AgentMessage.role == "assistant",
+        AgentMessage.created_at >= _utcnow() - timedelta(minutes=1),
+    ).scalar() or 0
+    if recent_attempts >= AGENT_ATTEMPTS_PER_MINUTE:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many assistant requests. Please wait a minute and try again.",
+            headers={"Retry-After": "60"},
+        )
+
+
 @router.get("/threads")
 def list_threads(
     archived: bool = False,
     user_id: str = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
-    counts = dict(
-        db.query(AgentMessage.thread_id, func.count(AgentMessage.id))
-        .filter(
-            AgentMessage.user_id == user_id,
-            AgentMessage.status != "superseded",
-        )
-        .group_by(AgentMessage.thread_id)
-        .all()
-    )
     threads = (
         db.query(AgentThread)
         .filter(
@@ -497,6 +532,23 @@ def list_threads(
         )
         .order_by(AgentThread.updated_at.desc())
         .limit(100)
+        .all()
+    )
+    if not threads:
+        return []
+
+    # Count only the bounded page being returned. A long-lived account may
+    # have thousands of archived threads, and aggregating every message before
+    # applying the page limit makes opening the assistant slower over time.
+    thread_ids = [thread.id for thread in threads]
+    counts = dict(
+        db.query(AgentMessage.thread_id, func.count(AgentMessage.id))
+        .filter(
+            AgentMessage.user_id == user_id,
+            AgentMessage.thread_id.in_(thread_ids),
+            AgentMessage.status != "superseded",
+        )
+        .group_by(AgentMessage.thread_id)
         .all()
     )
     return [_serialize_thread(thread, counts.get(thread.id, 0)) for thread in threads]
@@ -659,6 +711,8 @@ def create_message(
             detail="This message was already received. Retry its failed response instead.",
         )
 
+    _enforce_agent_rate_limit(db, user_id)
+
     user_message = AgentMessage(
         id=uuid4(),
         thread_id=thread.id,
@@ -718,6 +772,8 @@ def retry_message(
     ).first()
     if not failed or not failed.reply_to_id:
         raise HTTPException(status_code=409, detail="Only failed responses can be retried")
+
+    _enforce_agent_rate_limit(db, user_id)
 
     failed.status = "superseded"
     retry = AgentMessage(

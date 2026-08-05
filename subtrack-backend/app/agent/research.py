@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import AgentResearchCache, Subscription
+from app.services.recurrence import cadence_for, cadence_label
 from app.services.schedules import utc_naive
 from app.services.trials import active_trial
 
@@ -123,6 +124,7 @@ def _fingerprint(
     market: str,
     requirements: str | None,
 ) -> str:
+    cadence = cadence_for(payment)
     snapshot = {
         "id": str(payment.id),
         "name": payment.name,
@@ -130,6 +132,8 @@ def _fingerprint(
         "amount": round(payment.amount, 4),
         "currency": payment.currency,
         "cycle": _enum(payment.cycle),
+        "interval_unit": cadence.unit,
+        "interval_count": cadence.count,
         "trial_ends_at": (
             utc_naive(payment.trial_ends_at).isoformat()
             if payment.trial_ends_at else None
@@ -188,12 +192,15 @@ def _assistant_content(response) -> list[dict]:
 
 def _run_search(payment: Subscription, market: str, requirements: str | None) -> dict:
     today = utcnow().date().isoformat()
+    cadence = cadence_for(payment)
     payment_data = {
         "name": payment.name,
         "category": _enum(payment.category),
         "current_price": payment.amount,
         "currency": payment.currency,
-        "billing_cycle": _enum(payment.cycle),
+        "billing_cadence": cadence_label(cadence.unit, cadence.count),
+        "interval_unit": cadence.unit,
+        "interval_count": cadence.count,
         "is_active_trial": active_trial(payment),
         "market": market,
         "requirements": requirements,
@@ -293,6 +300,12 @@ def research_alternatives(
             "reason": "You have reached the live comparison limit for this hour. Cached comparisons remain available.",
         }
 
+    # ``payment`` is fully loaded. Detach it and end the read transaction before
+    # the potentially 90-second external search, otherwise every live research
+    # request holds a database-pool slot while no database work is happening.
+    db.expunge(payment)
+    db.commit()
+
     try:
         researched = _run_search(payment, market, requirements)
     except anthropic.BadRequestError:
@@ -322,6 +335,9 @@ def research_alternatives(
             "amount": payment.amount,
             "currency": payment.currency,
             "cycle": _enum(payment.cycle),
+            "interval_unit": cadence_for(payment).unit,
+            "interval_count": cadence_for(payment).count,
+            "cadence_label": cadence_label(payment),
         },
         "market": market,
         "market_source": "user" if requested_market else "inferred_from_currency",

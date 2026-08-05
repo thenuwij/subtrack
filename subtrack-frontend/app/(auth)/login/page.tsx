@@ -3,6 +3,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { LogoMark } from '@/components/layout/Logo'
+import { useHydrated } from '@/lib/hooks/useHydrated'
 
 const POINTS = [
   {
@@ -23,6 +24,13 @@ export default function LoginPage() {
   const supabase = createClient()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const hydrated = useHydrated()
+  const reason = hydrated
+    ? new URLSearchParams(window.location.search).get('reason')
+    : null
+  const sessionExpired = reason === 'session_expired'
+  const gmailRevocationFailed = reason === 'data_deleted_gmail_revoke_failed'
+  const dataDeleted = reason === 'data_deleted' || gmailRevocationFailed
 
   async function handleGoogleLogin() {
     setBusy(true)
@@ -56,6 +64,19 @@ export default function LoginPage() {
             Subscriptions, rent, bills and memberships — found in your inbox and
             added up in one place.
           </p>
+
+          {sessionExpired ? (
+            <p role="status" className="mt-5 rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2.5 text-sm text-foreground">
+              Your session expired. Sign in again to continue.
+            </p>
+          ) : dataDeleted ? (
+            <p role="status" className="mt-5 rounded-xl border border-border bg-muted/50 px-3 py-2.5 text-sm text-foreground">
+              Your Subtrack app data was deleted and you have been signed out.
+              {gmailRevocationFailed
+                ? ' Google could not be reached to revoke the former Gmail permission, so remove Subtrack from your Google Account permissions as well.'
+                : ''}
+            </p>
+          ) : null}
 
           <button
             onClick={handleGoogleLogin}

@@ -5,15 +5,16 @@ import Link from 'next/link'
 import { Bell, CalendarClock, Check, Clock3 } from 'lucide-react'
 import type { PaymentReminder } from '@/types'
 import { Button } from '@/components/ui/button'
+import { formatStoredDate } from '@/lib/utils/dates'
 
 
 function formatDate(value: string | null) {
   if (!value) return 'Date needed'
-  return new Intl.DateTimeFormat('en-AU', {
+  return formatStoredDate(value, {
     weekday: 'short',
     day: 'numeric',
     month: 'short',
-  }).format(new Date(value))
+  })
 }
 
 function reminderCopy(reminder: PaymentReminder) {

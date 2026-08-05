@@ -52,7 +52,7 @@ export default function TermsPage() {
 
         <h2>Ending use</h2>
         <p>
-          You may disconnect Gmail and delete stored items from the app. Access may be suspended where necessary to protect users, providers, or the service from abuse or security risk.
+          You may disconnect Gmail, download your app data, delete individual records, or permanently delete all user-owned Subtrack app records from Account. App-data deletion does not currently delete the external Supabase sign-in identity; this is disclosed before confirmation. Access may be suspended where necessary to protect users, providers, or the service from abuse or security risk.
         </p>
 
         <h2>Privacy</h2>

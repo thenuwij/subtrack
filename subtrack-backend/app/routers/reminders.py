@@ -17,6 +17,7 @@ from app.services.reminders import (
     reminder_payload,
     utcnow,
 )
+from app.services.recurrence import effective_status
 from app.services.schedules import utc_naive
 
 
@@ -68,12 +69,23 @@ def _get_reminder(db: Session, user_id: str, reminder_id: UUID) -> PaymentRemind
 
 def _validate_schedule(kind: str, target_date: datetime | None, subscription) -> datetime | None:
     target = utc_naive(target_date) if target_date else None
+    lifecycle = effective_status(subscription)
+    if lifecycle in {"cancelled", "ended"}:
+        raise HTTPException(
+            status_code=422,
+            detail="Cancelled or ended payments cannot have active reminders",
+        )
     if kind == "trial_end" and target is None:
         raise HTTPException(status_code=422, detail="A trial reminder needs the trial end date")
     if target is None and subscription.next_due is None:
         raise HTTPException(
             status_code=422,
             detail="Add a next payment date before creating a recurring reminder",
+        )
+    if target is None and lifecycle == "paused" and not subscription.paused_until:
+        raise HTTPException(
+            status_code=422,
+            detail="Add a resume date or choose a fixed reminder date for this paused payment",
         )
     if target and target.date() < utcnow().date():
         raise HTTPException(status_code=422, detail="The reminder date has already passed")
@@ -105,7 +117,14 @@ def create_reminder(
     user_id: str = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
-    subscription = get_owned_subscription(db, user_id, data.subscription_id)
+    # Serialize reminder creation for one payment. Without this lock, two tabs
+    # can both pass the duplicate check before either insert commits.
+    subscription = get_owned_subscription(
+        db,
+        user_id,
+        data.subscription_id,
+        for_update=True,
+    )
     if not subscription:
         raise HTTPException(status_code=404, detail="Recurring payment not found")
     target = _validate_schedule(data.kind, data.target_date, subscription)

@@ -1,4 +1,5 @@
 """Anthropic schemas for user-scoped reads and inert action proposals."""
+from datetime import datetime, time
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -21,12 +22,16 @@ from app.agent.finance import (
     upcoming_charges,
 )
 from app.agent.research import ALTERNATIVE_RESEARCH_TOOL, research_alternatives
+from app.models import Category
 
 
-CATEGORIES = [
-    "streaming", "software", "cloud", "utilities",
-    "fitness", "food", "transport", "other",
-]
+CATEGORIES = [item.value for item in Category]
+
+
+def _utc_date(value: str, *, end_of_day: bool = False) -> datetime:
+    """Interpret assistant date-only tool input using Subtrack's UTC policy."""
+    parsed = datetime.strptime(value, "%Y-%m-%d").date()
+    return datetime.combine(parsed, time.max if end_of_day else time.min)
 
 READ_TOOL_DEFINITIONS = [
     {
@@ -75,12 +80,18 @@ READ_TOOL_DEFINITIONS = [
     {
         "name": "get_upcoming_charges",
         "description": (
-            "Get tracked recurring payments due in the next 1-365 days. Past recorded dates "
-            "are projected forward using the recorded billing cycle and labelled as projected."
+            "Get every projected charge occurrence for tracked recurring payments in either "
+            "the next 1-730 days or an inclusive UTC date range. This is a forecast, not "
+            "recorded transaction history. A weekly payment can appear many times."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"days": {"type": "integer", "minimum": 1, "maximum": 365}},
+            "properties": {
+                "days": {"type": ["integer", "null"], "minimum": 1, "maximum": 730},
+                "start_date": {"type": ["string", "null"], "format": "date"},
+                "end_date": {"type": ["string", "null"], "format": "date"},
+            },
+            "required": ["days", "start_date", "end_date"],
             "additionalProperties": False,
         },
     },
@@ -196,7 +207,23 @@ def run_tool(
     if tool_name == "get_recurring_payment":
         return payment_detail(db, user_id, tool_input.get("subscription_id", ""))
     if tool_name == "get_upcoming_charges":
-        return upcoming_charges(db, user_id, tool_input.get("days", 30))
+        start_date = tool_input.get("start_date")
+        end_date = tool_input.get("end_date")
+        if bool(start_date) != bool(end_date):
+            return {
+                "error": "Both start_date and end_date are required for a custom forecast window."
+            }
+        try:
+            if start_date and end_date:
+                return upcoming_charges(
+                    db,
+                    user_id,
+                    start_at=_utc_date(start_date),
+                    end_at=_utc_date(end_date, end_of_day=True),
+                )
+            return upcoming_charges(db, user_id, tool_input.get("days") or 30)
+        except (TypeError, ValueError) as exc:
+            return {"error": str(exc)}
     if tool_name == "get_commitment_changes":
         return commitment_changes(db, user_id, tool_input.get("period", "current_month"))
     if tool_name == "find_duplicate_payments":

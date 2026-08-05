@@ -1,11 +1,20 @@
 const CATEGORY_LABELS: Record<string, string> = {
+  housing: 'Housing',
+  insurance: 'Insurance',
+  phone_internet: 'Phone & internet',
   streaming: 'Entertainment',
   software: 'Apps & software',
   cloud: 'Cloud & hosting',
-  utilities: 'Housing & utilities',
+  utilities: 'Utilities',
   fitness: 'Health & fitness',
   food: 'Food plans',
   transport: 'Transport',
+  education: 'Education',
+  childcare: 'Childcare',
+  debt: 'Loans & debt',
+  memberships: 'Memberships',
+  donations: 'Donations',
+  business: 'Business services',
   other: 'Other recurring',
 }
 
@@ -16,15 +25,26 @@ export function formatCategory(category: string) {
 // Display order for legends and grouped lists. Fixed rather than derived from
 // the data, so a category doesn't jump position between renders as amounts change.
 export const CATEGORY_ORDER = [
+  'housing',
   'utilities',
+  'phone_internet',
+  'insurance',
   'software',
   'streaming',
   'cloud',
   'transport',
   'fitness',
   'food',
+  'education',
+  'childcare',
+  'debt',
+  'memberships',
+  'donations',
+  'business',
   'other',
 ] as const
+
+export const CATEGORIES = [...CATEGORY_ORDER]
 
 /** The category's colour, as a CSS variable reference.
  *

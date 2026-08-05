@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { supabaseAnonKey, supabaseUrl } from '@/lib/supabase/config'
 
 // Next 16 renamed the `middleware` convention to `proxy`. It only runs from the
 // project root — while this lived at app/middleware.ts it never executed at all.
@@ -9,8 +10,8 @@ export async function proxy(request: NextRequest) {
   })
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         getAll() {

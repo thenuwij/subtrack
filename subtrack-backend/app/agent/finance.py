@@ -24,9 +24,18 @@ from app.models import (
     UserPreference,
 )
 from app.routers.rates import get_cached_rate_snapshot
-from app.routers.subscriptions import monthly_equivalent
-from app.services.schedules import project_next_occurrence
 from app.services.reminders import list_user_reminders
+from app.services.recurrence import (
+    annual_equivalent,
+    cadence_for,
+    cadence_label,
+    contributes_to_current_total,
+    effective_status,
+    forecast_end_for,
+    monthly_equivalent,
+    occurrences_between,
+    utc_naive,
+)
 from app.services.trials import active_trial
 
 
@@ -57,7 +66,7 @@ class CurrencyContext:
     def for_user(cls, db: Session, user_id: str) -> "CurrencyContext":
         pref = _preference(db, user_id)
         base = pref.base_currency if pref else "AUD"
-        return cls(base=base, snapshot=get_cached_rate_snapshot(base))
+        return cls(base=base, snapshot=get_cached_rate_snapshot(base, db=db))
 
     def convert(
         self,
@@ -66,6 +75,12 @@ class CurrencyContext:
         *,
         stored_amount: float | None = None,
     ) -> tuple[float | None, str]:
+        # `stored_amount` is retained in the call contract for rolling schema
+        # compatibility, but cannot safely be used as a fallback: the legacy
+        # row does not record which historical base currency it targets. A
+        # user may have changed base currency since entry, so treating it as
+        # today's base would silently produce a false 1:1-like total.
+        del stored_amount
         if amount is None:
             return None, "not_applicable"
         if currency == self.base:
@@ -75,18 +90,13 @@ class CurrencyContext:
             if rate and rate > 0:
                 quality = "stale_current_rate" if self.snapshot.get("stale") else "current_rate"
                 return amount / rate, quality
-        if stored_amount is not None:
-            # This was converted when the record was entered.  The old schema
-            # did not record the target currency, so it is useful but must be
-            # labelled as an estimate rather than asserted as exact.
-            return stored_amount, "stored_entry_rate_estimate"
         return None, "unconverted"
 
     def metadata(self, qualities: Iterable[str]) -> dict:
         quality_set = set(qualities)
         incomplete = "unconverted" in quality_set
         estimated = bool(
-            quality_set & {"stale_current_rate", "stored_entry_rate_estimate"}
+            quality_set & {"stale_current_rate"}
         )
         if incomplete:
             status = "incomplete"
@@ -112,11 +122,12 @@ class CurrencyContext:
 
 
 def _active_subscriptions(db: Session, user_id: str) -> list[Subscription]:
-    return (
+    rows = (
         db.query(Subscription)
         .filter(Subscription.user_id == user_id, Subscription.is_active == True)  # noqa: E712
         .all()
     )
+    return [sub for sub in rows if effective_status(sub) not in {"cancelled", "ended"}]
 
 
 def _payment_payload(sub: Subscription, currency: CurrencyContext) -> tuple[dict, str]:
@@ -125,7 +136,9 @@ def _payment_payload(sub: Subscription, currency: CurrencyContext) -> tuple[dict
         sub.currency,
         stored_amount=sub.converted_amount,
     )
-    monthly = monthly_equivalent(base_amount, sub.cycle) if base_amount is not None else None
+    cadence = cadence_for(sub)
+    monthly = monthly_equivalent(base_amount, sub) if base_amount is not None else None
+    yearly = annual_equivalent(base_amount, sub) if base_amount is not None else None
     return {
         "id": str(sub.id),
         "name": sub.name,
@@ -133,11 +146,27 @@ def _payment_payload(sub: Subscription, currency: CurrencyContext) -> tuple[dict
         "amount": _money(sub.amount),
         "currency": sub.currency,
         "cycle": _enum_value(sub.cycle),
+        "interval_unit": cadence.unit,
+        "interval_count": cadence.count,
+        "cadence_label": cadence_label(cadence.unit, cadence.count),
         "monthly_in_base": _money(monthly),
+        "yearly_in_base": _money(yearly),
         "base_currency": currency.base,
         "conversion_quality": quality,
         "next_due": sub.next_due.isoformat() if sub.next_due else None,
         "trial_ends_at": sub.trial_ends_at.isoformat() if sub.trial_ends_at else None,
+        "recurrence_end_at": (
+            sub.recurrence_end_at.isoformat() if sub.recurrence_end_at else None
+        ),
+        "status": effective_status(sub),
+        "paused_until": sub.paused_until.isoformat() if sub.paused_until else None,
+        "cancellation_effective_at": (
+            sub.cancellation_effective_at.isoformat()
+            if sub.cancellation_effective_at else None
+        ),
+        "amount_type": sub.amount_type or "fixed",
+        "amount_is_estimate": (sub.amount_type or "fixed") == "variable",
+        "spending_type": sub.spending_type or "unspecified",
         "is_active_trial": active_trial(sub),
         "amount_meaning": "price_after_trial" if active_trial(sub) else "current_recurring_price",
         "is_shared": sub.split_mode != "full",
@@ -149,7 +178,11 @@ def _payment_payload(sub: Subscription, currency: CurrencyContext) -> tuple[dict
 def financial_overview(db: Session, user_id: str) -> dict:
     subs = _active_subscriptions(db, user_id)
     trial_subs = [sub for sub in subs if active_trial(sub)]
-    paid_subs = [sub for sub in subs if not active_trial(sub)]
+    paid_subs = [
+        sub for sub in subs
+        if not active_trial(sub) and contributes_to_current_total(sub)
+    ]
+    paused_subs = [sub for sub in subs if effective_status(sub) == "paused"]
     currency = CurrencyContext.for_user(db, user_id)
     qualities: list[str] = []
     total = 0.0
@@ -171,9 +204,11 @@ def financial_overview(db: Session, user_id: str) -> dict:
                 "amount": _money(sub.amount),
                 "currency": sub.currency,
                 "cycle": _enum_value(sub.cycle),
+                "interval_unit": cadence_for(sub).unit,
+                "interval_count": cadence_for(sub).count,
             })
             continue
-        monthly = monthly_equivalent(base_amount, sub.cycle)
+        monthly = monthly_equivalent(base_amount, sub)
         converted_count += 1
         total += monthly
         category = _enum_value(sub.category)
@@ -193,6 +228,7 @@ def financial_overview(db: Session, user_id: str) -> dict:
         "scope": SCOPE_NOTE,
         "tracked_payment_count": len(subs),
         "active_payment_count": len(paid_subs),
+        "paused_payment_count": len(paused_subs),
         "active_trial_count": len(trial_subs),
         "active_trials": [
             {
@@ -202,12 +238,21 @@ def financial_overview(db: Session, user_id: str) -> dict:
                 "price_after_trial": _money(sub.amount),
                 "currency": sub.currency,
                 "cycle": _enum_value(sub.cycle),
+                "interval_unit": cadence_for(sub).unit,
+                "interval_count": cadence_for(sub).count,
             }
             for sub in sorted(trial_subs, key=lambda item: item.trial_ends_at)
         ],
         "included_in_aggregate_count": converted_count,
         "monthly_recurring_total": _money(total),
         "yearly_recurring_total": _money(total * 12),
+        "amount_semantics": (
+            "Normalized recurring commitment equivalents, not exact monthly charges. "
+            "Variable payments use their currently recorded estimate."
+        ),
+        "variable_payment_count": sum(
+            1 for sub in paid_subs if (sub.amount_type or "fixed") == "variable"
+        ),
         "base_currency": currency.base,
         "monthly_income": _money(income),
         "recurring_share_of_income_percent": (
@@ -284,36 +329,93 @@ def upcoming_charges(
     days: int = 30,
     *,
     now: datetime | None = None,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
 ) -> dict:
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
-    days = max(1, min(int(days), 365))
-    end = now + timedelta(days=days)
+    start = utc_naive(start_at or now)
+    if end_at is not None:
+        end = utc_naive(end_at)
+        if end < start:
+            raise ValueError("Forecast end must not be before its start")
+        if (end - start).days > 730:
+            raise ValueError("Forecast windows are limited to 730 days")
+        days = max(1, (end.date() - start.date()).days)
+    else:
+        days = max(1, min(int(days), 730))
+        end = start + timedelta(days=days)
     currency = CurrencyContext.for_user(db, user_id)
     rows: list[dict] = []
     qualities: list[str] = []
     missing_due_count = 0
+    paused_without_resume_count = 0
+    total_in_base = 0.0
+    unconverted_occurrence_count = 0
     for sub in _active_subscriptions(db, user_id):
-        due, source = project_next_occurrence(sub.next_due, sub.cycle, now)
-        if not due:
+        status = effective_status(sub, start)
+        occurrence_start = start
+        if status == "paused":
+            if not sub.paused_until:
+                paused_without_resume_count += 1
+                continue
+            occurrence_start = max(start, utc_naive(sub.paused_until))
+        if not sub.next_due:
             missing_due_count += 1
-            continue
-        if due > end:
             continue
         payload, quality = _payment_payload(sub, currency)
         qualities.append(quality)
-        rows.append({
-            **payload,
-            "due_at": due.isoformat(),
-            "days_until_due": max(0, (due.date() - now.date()).days),
-            "due_date_source": source,
-            "charge_kind": "trial_conversion" if active_trial(sub, now) else "renewal",
-        })
+        due_dates = occurrences_between(
+            sub.next_due,
+            sub,
+            occurrence_start,
+            end,
+            recurrence_end_at=forecast_end_for(sub),
+        )
+        # The payment payload's normalized monthly value is not the charge.
+        # Convert the native per-occurrence amount independently.
+        converted_charge, _ = currency.convert(
+            sub.amount,
+            sub.currency,
+            stored_amount=sub.converted_amount,
+        )
+        for due in due_dates:
+            if converted_charge is None:
+                unconverted_occurrence_count += 1
+            else:
+                total_in_base += converted_charge
+            trial_conversion = bool(
+                sub.trial_ends_at
+                and due.date() == utc_naive(sub.trial_ends_at).date()
+                and active_trial(sub, start)
+            )
+            rows.append({
+                **payload,
+                "due_at": due.isoformat(),
+                "days_until_due": max(0, (due.date() - now.date()).days),
+                "due_date_source": (
+                    "recorded"
+                    if due == utc_naive(sub.next_due)
+                    else "projected_from_recorded_cycle"
+                ),
+                "charge_kind": "trial_conversion" if trial_conversion else "renewal",
+                "charge_amount_in_base": _money(converted_charge),
+                "charge_amount_is_estimate": payload["amount_is_estimate"],
+            })
     rows.sort(key=lambda row: (row["due_at"], row["name"].casefold()))
     return {
         "scope": SCOPE_NOTE,
+        "forecast_semantics": (
+            "Projected charge occurrences from saved cadence and dates; these are not recorded bank transactions."
+        ),
+        "window_start": start.isoformat(),
+        "window_end": end.isoformat(),
         "window_days": days,
         "charges": rows,
+        "occurrence_count": len(rows),
+        "forecast_total_in_base": _money(total_in_base),
+        "unconverted_occurrence_count": unconverted_occurrence_count,
         "missing_due_date_count": missing_due_count,
+        "paused_without_resume_count": paused_without_resume_count,
         "currency_conversion": currency.metadata(qualities),
     }
 
@@ -377,6 +479,11 @@ def commitment_changes(
             "changed_at": change.changed_at.isoformat() if change.changed_at else None,
         })
     conversion = currency.metadata(qualities + (["unconverted"] if incomplete else []))
+    conversion["historical_basis"] = (
+        "Native commitment-change amounts are fixed at the recorded value. "
+        "Base-currency deltas are re-expressed with the labelled FX snapshot "
+        "and may move when that snapshot changes."
+    )
     return {
         "scope": SCOPE_NOTE,
         "period": period,
@@ -390,18 +497,28 @@ def commitment_changes(
 
 
 def duplicate_payments(db: Session, user_id: str) -> dict:
-    # Keep the model-assisted matcher isolated to this explicitly requested
-    # tool.  It returns suggestions only; no merge or delete action is exposed.
-    from app.gmail.analyzer import find_duplicates
+    # REST and assistant reads share the same bounded model cache and durable
+    # false-positive filter so they cannot disagree or double external load.
+    from app.services.duplicates import duplicate_suggestions
 
-    subs = sorted(_active_subscriptions(db, user_id), key=lambda sub: sub.name.casefold())
+    try:
+        subs, suggested_pairs = duplicate_suggestions(db, user_id)
+    except RuntimeError as exc:
+        return {
+            "scope": SCOPE_NOTE,
+            "suggestions": [],
+            "suggestion_count": 0,
+            "requires_user_confirmation": True,
+            "temporarily_unavailable": True,
+            "error": str(exc),
+        }
     pairs = []
-    for keep, merge, reason in find_duplicates(subs):
+    for keep, merge, reason in suggested_pairs:
         pairs.append({
             "keep": {"id": str(subs[keep].id), "name": subs[keep].name},
             "possible_duplicate": {"id": str(subs[merge].id), "name": subs[merge].name},
             "reason": reason,
-            "effect": "Both records are currently included in Subtrack totals. This does not prove two bank charges occurred.",
+            "effect": "Keeping both may double-count a recurring commitment. This does not prove two bank charges occurred.",
         })
     return {
         "scope": SCOPE_NOTE,
@@ -449,9 +566,25 @@ def review_detections(db: Session, user_id: str, tool_input: dict) -> dict:
                 "amount": _money(row.amount),
                 "currency": row.currency,
                 "cycle": _enum_value(row.cycle),
+                "interval_unit": row.interval_unit,
+                "interval_count": row.interval_count,
+                "cadence_label": (
+                    cadence_label(row.interval_unit, row.interval_count)
+                    if row.interval_unit and row.interval_count else None
+                ),
+                "cadence_confidence": row.cadence_confidence or "unknown",
+                "cadence_evidence": row.cadence_evidence,
+                "cadence_needs_confirmation": not bool(
+                    row.interval_unit and row.interval_count
+                ),
                 "category": _enum_value(row.category),
                 "confidence": row.confidence,
                 "charge_count": row.charge_count,
+                "next_due": row.next_due.isoformat() if row.next_due else None,
+                "due_date_confidence": row.due_date_confidence or "unknown",
+                "due_date_evidence": row.due_date_evidence,
+                "amount_type": row.amount_type or "fixed",
+                "amount_is_estimate": (row.amount_type or "fixed") == "variable",
                 "trial_ends_at": row.trial_ends_at.isoformat()
                     if row.trial_ends_at else None,
                 "is_trial": row.trial_ends_at is not None,
@@ -500,10 +633,16 @@ def saving_candidates(db: Session, user_id: str, limit: int = 5) -> dict:
     currency = CurrencyContext.for_user(db, user_id)
     rows: list[tuple[Subscription, dict, str]] = []
     for sub in _active_subscriptions(db, user_id):
+        if active_trial(sub) or not contributes_to_current_total(sub):
+            continue
         payload, quality = _payment_payload(sub, currency)
         if payload["monthly_in_base"] is not None:
             rows.append((sub, payload, quality))
-    rows.sort(key=lambda item: item[1]["monthly_in_base"], reverse=True)
+    label_priority = {"optional": 0, "unspecified": 1, "essential": 2}
+    rows.sort(key=lambda item: (
+        label_priority.get(item[1]["spending_type"], 1),
+        -item[1]["monthly_in_base"],
+    ))
 
     recent_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=90)
     increases = (
@@ -519,7 +658,11 @@ def saving_candidates(db: Session, user_id: str, limit: int = 5) -> dict:
     increased_ids = {str(change.subscription_id) for change in increases}
     candidates = []
     for sub, payload, _ in rows[:limit]:
-        reasons = ["one of your largest tracked monthly commitments"]
+        reasons = ["one of the larger tracked normalized monthly commitments"]
+        if payload["spending_type"] == "optional":
+            reasons.append("you labelled it optional")
+        elif payload["spending_type"] == "essential":
+            reasons.append("you labelled it essential; do not assume it can be removed")
         if str(sub.id) in increased_ids:
             reasons.append("its recorded monthly cost increased in the last 90 days")
         candidates.append({
@@ -527,6 +670,8 @@ def saving_candidates(db: Session, user_id: str, limit: int = 5) -> dict:
             "name": payload["name"],
             "monthly_in_base": payload["monthly_in_base"],
             "base_currency": currency.base,
+            "spending_type": payload["spending_type"],
+            "amount_is_estimate": payload["amount_is_estimate"],
             "evidence": reasons,
             "necessity_assessment": "unknown — only the user can decide whether it is valuable or necessary",
         })

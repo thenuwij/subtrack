@@ -128,17 +128,20 @@ class GmailScanPipelineTests(unittest.TestCase):
         self.assertIn("Try again", account.scan_error)
         db.close()
 
-    def test_staleness_uses_heartbeat_not_original_start(self):
+    def test_staleness_honours_heartbeat_and_absolute_two_minute_budget(self):
         account = GmailAccount(
             user_id="owner",
             email_address="owner@example.com",
             refresh_token_encrypted="encrypted",
             scan_status="running",
-            scan_started_at=utcnow() - timedelta(hours=1),
+            scan_started_at=utcnow() - timedelta(seconds=30),
             scan_heartbeat_at=utcnow(),
         )
         self.assertFalse(gmail_router._scan_is_stale(account))
         account.scan_heartbeat_at = utcnow() - timedelta(minutes=4)
+        self.assertTrue(gmail_router._scan_is_stale(account))
+        account.scan_started_at = utcnow() - timedelta(hours=1)
+        account.scan_heartbeat_at = utcnow()
         self.assertTrue(gmail_router._scan_is_stale(account))
 
     def test_user_facing_budget_leaves_polling_headroom(self):

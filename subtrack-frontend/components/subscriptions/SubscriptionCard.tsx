@@ -8,18 +8,20 @@ import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
 import { categoryColor, formatCategory } from '@/lib/utils/categories'
 import { isActiveTrial } from '@/lib/utils/trials'
+import {
+  cadenceLabel,
+  isTerminalStatus,
+  monthlyEquivalentNative,
+  paymentStatusLabel,
+  yearlyEquivalentNative,
+} from '@/lib/utils/recurrence'
 import { toast } from 'sonner'
-
-const CYCLE_LABEL: Record<string, string> = {
-  weekly:  '/wk',
-  monthly: '/mo',
-  yearly:  '/yr',
-}
+import { formatStoredDate } from '@/lib/utils/dates'
 
 // Just the date it next goes out. Subtrack isn't tracking whether payments landed,
 // so anything framed as overdue/due-soon would be claiming knowledge it doesn't have.
 function formatNextDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
+  return formatStoredDate(dateStr, { day: 'numeric', month: 'short' })
 }
 
 interface Props {
@@ -39,13 +41,31 @@ export function SubscriptionCard({
 }: Props) {
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting]     = useState(false)
-  const { baseCurrency, convertAmount } = useCurrency()
+  const { baseCurrency, canConvert, convertAmount, ratesLoading } = useCurrency()
 
-  const nextDate = subscription.next_due ? formatNextDate(subscription.next_due) : null
+  const nextDate = subscription.next_expected_at
+    ? formatNextDate(subscription.next_expected_at) : null
   const trialEnd = subscription.trial_ends_at
     ? formatNextDate(subscription.trial_ends_at)
     : null
-  const trialActive = isActiveTrial(subscription)
+  const terminal = isTerminalStatus(subscription.status)
+  const remindersAvailable = subscription.status === 'active'
+    || subscription.status === 'cancelling'
+  const trialActive = !terminal && isActiveTrial(subscription)
+  const canShowConversion = canConvert(subscription.currency)
+  const monthlyNative = monthlyEquivalentNative(subscription)
+  const yearlyNative = yearlyEquivalentNative(subscription)
+  const monthlyBase = canShowConversion
+    ? convertAmount(monthlyNative, subscription.currency)
+    : null
+  const yearlyBase = canShowConversion
+    ? convertAmount(yearlyNative, subscription.currency)
+    : null
+  const lifecycleDate = subscription.status === 'paused'
+    ? subscription.paused_until
+    : subscription.status === 'cancelling'
+      ? subscription.cancellation_effective_at
+      : subscription.recurrence_end_at
 
   async function handleDelete() {
     setDeleting(true)
@@ -78,12 +98,30 @@ export function SubscriptionCard({
                 Free trial
               </span>
             ) : null}
+            {subscription.status !== 'active' ? (
+              <span className="inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                {paymentStatusLabel(subscription.status)}
+              </span>
+            ) : null}
+            {subscription.amount_type === 'variable' ? (
+              <span className="inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                Estimated
+              </span>
+            ) : null}
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">
             {formatCategory(subscription.category)}
             {trialActive && trialEnd
               ? <span className="ml-1.5">· trial ends {trialEnd}</span>
-              : nextDate && <span className="ml-1.5">· next {nextDate}</span>}
+              : nextDate && remindersAvailable
+                ? <span className="ml-1.5">· next {nextDate}</span>
+                : null}
+            {lifecycleDate ? (
+              <span className="ml-1.5">
+                · {subscription.status === 'paused' ? 'resumes' : subscription.status === 'cancelling' ? 'ends' : 'final date'}{' '}
+                {formatNextDate(lifecycleDate)}
+              </span>
+            ) : null}
             {subscription.full_amount != null && (
               <span className="ml-1.5">
                 · your share of{' '}
@@ -98,24 +136,31 @@ export function SubscriptionCard({
       <div className="flex shrink-0 items-center justify-between gap-3 pl-5 sm:justify-start sm:pl-0">
         <div className="text-right">
           <p className="font-semibold text-sm tabular-nums leading-tight">
+            {subscription.amount_type === 'variable' ? '≈ ' : ''}
             {formatCurrency(subscription.amount, subscription.currency)}
-            <span className="text-xs font-normal text-muted-foreground ml-0.5">
-              {CYCLE_LABEL[subscription.cycle]}
+            <span className="ml-1 text-xs font-normal text-muted-foreground">
+              · {cadenceLabel(subscription).toLowerCase()}
             </span>
           </p>
           {trialActive ? (
             <p className="mt-0.5 text-[10px] font-medium text-primary">after trial</p>
           ) : null}
-          {subscription.currency !== baseCurrency && (
-            <p className="text-xs text-muted-foreground mt-0.5">
-              ≈ {formatCurrency(convertAmount(subscription.amount, subscription.currency), baseCurrency)}
+          {!trialActive && monthlyBase !== null && yearlyBase !== null ? (
+            <p className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+              {subscription.amount_type === 'variable' ? '≈ ' : ''}{formatCurrency(monthlyBase, baseCurrency)}/mo ·{' '}
+              {formatCurrency(yearlyBase, baseCurrency)}/yr
             </p>
-          )}
+          ) : null}
+          {!trialActive && !canShowConversion && subscription.currency !== baseCurrency ? (
+            <p className="mt-0.5 text-[10px] text-amber-700 dark:text-amber-300">
+              {ratesLoading ? 'Loading exchange rate…' : `${subscription.currency} conversion unavailable`}
+            </p>
+          ) : null}
         </div>
 
         {!confirming ? (
-          <div className="flex gap-1">
-            {onAskAssistant ? (
+          <div className="flex flex-wrap justify-end gap-1">
+            {onAskAssistant && !terminal ? (
               <Button
                 variant="ghost"
                 size="icon"
@@ -127,15 +172,17 @@ export function SubscriptionCard({
                 <Sparkles className="h-3.5 w-3.5" />
               </Button>
             ) : null}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:bg-primary/10 hover:text-primary"
-              onClick={() => onReminders(subscription)}
-              aria-label={`Manage reminders for ${subscription.name}`}
-            >
-              <Bell className="h-3.5 w-3.5" />
-            </Button>
+            {remindersAvailable ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                onClick={() => onReminders(subscription)}
+                aria-label={`Manage reminders for ${subscription.name}`}
+              >
+                <Bell className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
               size="sm"

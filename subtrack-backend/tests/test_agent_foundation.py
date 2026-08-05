@@ -17,7 +17,9 @@ from app.agent.tools import READ_TOOL_DEFINITIONS, TOOL_DEFINITIONS  # noqa: E40
 from app.database import Base  # noqa: E402
 from app.models import AgentMessage, AgentThread  # noqa: E402
 from app.routers.agent import (  # noqa: E402
+    AGENT_ATTEMPTS_PER_MINUTE,
     AgentPageContext,
+    _enforce_agent_rate_limit,
     _get_thread,
     _append_research_sources,
     _model_history,
@@ -69,6 +71,24 @@ class AgentFoundationTests(unittest.TestCase):
             for tool in TOOL_DEFINITIONS
         ))
 
+    def test_detection_approval_tool_only_allows_safe_date_clears(self):
+        approval = next(
+            tool
+            for tool in TOOL_DEFINITIONS
+            if tool["name"] == "propose_approve_inbox_detection"
+        )
+        schema = approval["input_schema"]
+        clear_fields = schema["properties"]["clear_fields"]
+
+        self.assertEqual(
+            clear_fields["items"]["enum"],
+            ["next_due", "trial_ends_at"],
+        )
+        self.assertTrue(clear_fields["uniqueItems"])
+        self.assertEqual(clear_fields["maxItems"], 2)
+        self.assertIn("clear_fields", schema["required"])
+        self.assertIn("null date leaves", clear_fields["description"])
+
     def test_research_sources_are_preserved_and_unsafe_links_are_dropped(self):
         rendered = _append_research_sources("A current comparison.", [
             {"title": "Official [pricing]", "url": "https://example.com/pricing"},
@@ -83,10 +103,14 @@ class AgentFoundationTests(unittest.TestCase):
             "page": "subscriptions",
             "route": "/subscriptions",
             "selected_subscription_ids": [str(uuid4())],
-            "filters": {"category": "software", "due_period": "month"},
+            "filters": {
+                "category": "software", "due_period": "month",
+                "record_scope": "paused",
+            },
         })
         self.assertEqual(context.page, "subscriptions")
         self.assertEqual(len(context.selected_subscription_ids), 1)
+        self.assertEqual(context.filters.record_scope, "paused")
 
         from pydantic import ValidationError
         with self.assertRaises(ValidationError):
@@ -140,6 +164,35 @@ class AgentFoundationTests(unittest.TestCase):
     def test_failures_have_safe_user_facing_copy(self):
         self.assertIn("saved", _public_error("timed_out").lower())
         self.assertNotIn("exception", _public_error("agent_error").lower())
+
+    def test_agent_attempts_are_rate_limited_per_user(self):
+        from fastapi import HTTPException
+
+        db = self.Session()
+        thread = AgentThread(
+            id=uuid4(), user_id="user-1", title="Busy",
+            next_message_sequence=AGENT_ATTEMPTS_PER_MINUTE,
+        )
+        db.add(thread)
+        db.flush()
+        db.add_all([
+            AgentMessage(
+                id=uuid4(), thread_id=thread.id, user_id="user-1",
+                role="assistant", sequence=index + 1, content="",
+                status="failed",
+            )
+            for index in range(AGENT_ATTEMPTS_PER_MINUTE)
+        ])
+        db.commit()
+
+        with self.assertRaises(HTTPException) as caught:
+            _enforce_agent_rate_limit(db, "user-1")
+        self.assertEqual(caught.exception.status_code, 429)
+        self.assertEqual(caught.exception.headers["Retry-After"], "60")
+
+        # Another account's usage never consumes this user's allowance.
+        _enforce_agent_rate_limit(db, "user-2")
+        db.close()
 
     def test_history_skips_failed_placeholders_and_coalesces_roles(self):
         db = self.Session()

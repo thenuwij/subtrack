@@ -9,12 +9,16 @@ function completedCopy(action: AgentAction) {
   if (action.action_type === 'remove_recurring_payment') {
     return 'Removed from Subtrack. The merchant subscription was not cancelled.'
   }
+  if (action.action_type === 'dismiss_duplicate_suggestion') {
+    return 'Kept separate. This pair will stay hidden from duplicate suggestions.'
+  }
   return 'Completed successfully.'
 }
 
 interface AgentActionCardProps {
   action: AgentAction
   busy: 'confirm' | 'reject' | null
+  disabled?: boolean
   onConfirm: (action: AgentAction) => Promise<void>
   onReject: (action: AgentAction) => Promise<void>
 }
@@ -22,6 +26,7 @@ interface AgentActionCardProps {
 export function AgentActionCard({
   action,
   busy,
+  disabled = false,
   onConfirm,
   onReject,
 }: AgentActionCardProps) {
@@ -83,7 +88,7 @@ export function AgentActionCard({
           <Button
             size="sm"
             variant="ghost"
-            disabled={busy !== null}
+            disabled={disabled || busy !== null}
             onClick={() => void onReject(action)}
           >
             {busy === 'reject' ? <LoaderCircle className="animate-spin" /> : <X />}
@@ -91,7 +96,7 @@ export function AgentActionCard({
           </Button>
           <Button
             size="sm"
-            disabled={busy !== null}
+            disabled={disabled || busy !== null}
             onClick={() => void onConfirm(action)}
           >
             {busy === 'confirm' ? <LoaderCircle className="animate-spin" /> : <Check />}

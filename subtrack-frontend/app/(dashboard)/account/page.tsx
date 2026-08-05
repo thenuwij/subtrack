@@ -1,11 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useCurrency } from '@/lib/context/currency'
 import {
+  deleteAccountData,
   disconnectGmail,
+  downloadAccountExport,
   getGmailConnectUrl,
   getGmailStatus,
   getPreferences,
@@ -19,21 +21,43 @@ import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/layout/ThemeToggle'
 import { toast } from 'sonner'
 import { GmailScanProgress } from '@/components/gmail/GmailScanProgress'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
 
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
+const GMAIL_ERROR_MESSAGES: Record<string, string> = {
+  cancelled: 'Google sign-in was cancelled. Nothing was connected.',
+  invalid_response: 'Google returned an invalid connection response. Please start again.',
+  connection_failed: 'Gmail could not be connected. Please start again.',
+}
+const DELETE_CONFIRMATION = 'DELETE MY SUBTRACK DATA' as const
 
 export default function AccountPage() {
   const router = useRouter()
   const [user, setUser] = useState<User | null>(null)
   const [imgError, setImgError] = useState(false)
   const [income, setIncome] = useState('')
-  const [incomeStatus, setIncomeStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [incomeStatus, setIncomeStatus] = useState<'idle' | 'saving' | 'saved' | 'cleared' | 'error'>('idle')
+  const [incomeError, setIncomeError] = useState('')
+  const incomeEdited = useRef(false)
+  const [hasSavedIncome, setHasSavedIncome] = useState(false)
   const [gmail, setGmail] = useState<GmailStatus | null>(null)
   // The OAuth callback redirects back here with a reason when connecting fails.
   const [gmailError, setGmailError] = useState<string | null>(null)
   const [gmailBusy, setGmailBusy] = useState(false)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
-  const { baseCurrency, setBaseCurrency, isLoading } = useCurrency()
+  const [exportBusy, setExportBusy] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteConfirmation, setDeleteConfirmation] = useState('')
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const { baseCurrency, setBaseCurrency, isLoading, isUpdating: currencyUpdating } = useCurrency()
 
   useEffect(() => {
     const supabase = createClient()
@@ -44,8 +68,10 @@ export default function AccountPage() {
       if (!session) return
       try {
         const prefs = await getPreferences(session.access_token)
-        if (prefs.monthly_income !== null && prefs.monthly_income !== undefined) {
+        if (!incomeEdited.current
+            && prefs.monthly_income !== null && prefs.monthly_income !== undefined) {
           setIncome(String(prefs.monthly_income))
+          setHasSavedIncome(true)
         }
       } catch (error) {
         toast.error(error instanceof Error ? error.message : 'Could not load account preferences.')
@@ -70,7 +96,10 @@ export default function AccountPage() {
     const params = new URLSearchParams(window.location.search)
     const failure = params.get('gmail_error')
     if (failure) {
-      setGmailError(failure)
+      setGmailError(
+        GMAIL_ERROR_MESSAGES[failure]
+          ?? 'Gmail could not be connected. Please start again.',
+      )
       window.history.replaceState({}, '', window.location.pathname)
     } else if (params.get('gmail') === 'connected') {
       toast.success('Gmail connected')
@@ -147,10 +176,14 @@ export default function AccountPage() {
   async function handleDisconnectGmail() {
     try {
       await withToken(async token => {
-        await disconnectGmail(token)
+        const result = await disconnectGmail(token)
         setGmail({ connected: false })
         setConfirmDisconnect(false)
-        toast.success('Gmail disconnected')
+        if (result.gmail_revocation === 'failed') {
+          toast.warning('Gmail was disconnected from Subtrack, but Google could not be reached to revoke access. Remove Subtrack from your Google Account permissions to revoke it manually.')
+        } else {
+          toast.success('Gmail disconnected')
+        }
       })
     } catch {
       toast.error('Could not disconnect Gmail. Please try again.')
@@ -161,23 +194,129 @@ export default function AccountPage() {
     const value = Number(income)
     if (!Number.isFinite(value) || value < 0) {
       setIncomeStatus('error')
+      setIncomeError('Enter a valid amount of zero or more.')
       return
     }
 
     setIncomeStatus('saving')
     try {
       const { data: { session } } = await createClient().auth.getSession()
-      if (!session) return
+      if (!session) throw new Error('Your session has expired.')
       await updatePreferences(session.access_token, { monthly_income: value })
+      incomeEdited.current = false
+      setHasSavedIncome(true)
       setIncomeStatus('saved')
-    } catch {
+      setIncomeError('')
+    } catch (error) {
       setIncomeStatus('error')
+      setIncomeError(error instanceof Error ? error.message : 'Could not save your income.')
+    }
+  }
+
+  async function handleCurrencyChange(currency: Currency) {
+    try {
+      const result = await setBaseCurrency(currency)
+      if (result.preferences.monthly_income !== null) {
+        setIncome(String(result.preferences.monthly_income))
+        setHasSavedIncome(true)
+        incomeEdited.current = false
+      }
+      if (result.ratesAvailable) {
+        toast.success(
+          result.preferences.income_converted
+            ? `Base currency and saved income converted to ${currency}`
+            : `Base currency changed to ${currency}`,
+        )
+      } else {
+        toast.warning(
+          `Base currency changed to ${currency}, but exchange rates are currently unavailable. Foreign-currency totals will be excluded.`,
+        )
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Could not update your base currency.',
+      )
+    }
+  }
+
+  async function handleClearIncome() {
+    setIncomeStatus('saving')
+    try {
+      const { data: { session } } = await createClient().auth.getSession()
+      if (!session) throw new Error('Your session has expired.')
+      await updatePreferences(session.access_token, { monthly_income: null })
+      setIncome('')
+      incomeEdited.current = false
+      setHasSavedIncome(false)
+      setIncomeStatus('cleared')
+      setIncomeError('')
+    } catch (error) {
+      setIncomeStatus('error')
+      setIncomeError(error instanceof Error ? error.message : 'Could not clear your income.')
     }
   }
 
   async function handleSignOut() {
     await createClient().auth.signOut()
     router.push('/login')
+  }
+
+  async function handleExport() {
+    setExportBusy(true)
+    try {
+      const { data: { session } } = await createClient().auth.getSession()
+      if (!session) throw new Error('Your session has expired.')
+      const { blob, filename } = await downloadAccountExport(session.access_token)
+      const href = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = href
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(href), 1_000)
+      toast.success('Your Subtrack data export is ready')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not download your data.')
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
+  async function handleDeleteData() {
+    if (deleteConfirmation !== DELETE_CONFIRMATION) return
+    setDeleteBusy(true)
+    const supabase = createClient()
+    let gmailRevocationFailed = false
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('Your session has expired.')
+      const result = await deleteAccountData(session.access_token, DELETE_CONFIRMATION)
+      gmailRevocationFailed = result.gmail_revocation === 'failed'
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Your data was not deleted.')
+      setDeleteBusy(false)
+      return
+    }
+
+    // The destructive server operation has succeeded at this point. Keep
+    // sign-out failure reporting separate so we never tell someone their data
+    // remains after it was actually deleted.
+    try {
+      await supabase.auth.signOut({ scope: 'local' })
+      router.replace(
+        gmailRevocationFailed
+          ? '/login?reason=data_deleted_gmail_revoke_failed'
+          : '/login?reason=data_deleted',
+      )
+    } catch {
+      setDeleteDialogOpen(false)
+      setDeleteConfirmation('')
+      setDeleteBusy(false)
+      toast.warning('Your Subtrack data was deleted, but this browser could not sign out. Please use Sign out before leaving this device.')
+    }
   }
 
   const meta       = user?.user_metadata ?? {}
@@ -264,8 +403,9 @@ export default function AccountPage() {
           </div>
           <select
             value={baseCurrency}
-            disabled={isLoading}
-            onChange={e => setBaseCurrency(e.target.value as Currency)}
+            disabled={isLoading || currencyUpdating}
+            onChange={event => void handleCurrencyChange(event.target.value as Currency)}
+            aria-label="Base currency"
             className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 transition-shadow shrink-0"
           >
             {CURRENCIES.map(c => (
@@ -281,7 +421,7 @@ export default function AccountPage() {
               Used to show what share of your income goes to recurring payments
             </p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
             <input
               type="number"
               min="0"
@@ -289,22 +429,41 @@ export default function AccountPage() {
               value={income}
               placeholder="0"
               onChange={e => {
+                incomeEdited.current = true
                 setIncome(e.target.value)
                 setIncomeStatus('idle')
+                setIncomeError('')
               }}
+              aria-label={`Monthly income in ${baseCurrency}`}
               className="w-32 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 transition-shadow"
             />
             <Button
+              type="button"
               onClick={handleSaveIncome}
               disabled={incomeStatus === 'saving' || income === ''}
             >
               {incomeStatus === 'saving' ? 'Saving' : incomeStatus === 'saved' ? 'Saved' : 'Save'}
             </Button>
+            {hasSavedIncome ? (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={handleClearIncome}
+                disabled={incomeStatus === 'saving'}
+                className="text-muted-foreground"
+              >
+                Clear
+              </Button>
+            ) : null}
           </div>
         </div>
 
+        {incomeStatus === 'cleared' ? (
+          <p role="status" className="text-xs text-muted-foreground">Monthly income removed.</p>
+        ) : null}
+
         {incomeStatus === 'error' && (
-          <p className="text-xs text-destructive">Enter a valid amount and try again.</p>
+          <p role="alert" className="text-xs text-destructive">{incomeError || 'Could not update your income.'}</p>
         )}
       </div>
 
@@ -336,7 +495,7 @@ export default function AccountPage() {
                 <div className="flex gap-2 shrink-0">
                   <Button
                     onClick={handleScan}
-                    disabled={gmailBusy || gmail.scan_status === 'running'}
+                    disabled={gmailBusy || gmail.scan_status === 'running' || gmail.configured === false}
                   >
                     {gmail.scan_status === 'running' ? 'Scanning' : 'Scan inbox'}
                   </Button>
@@ -346,6 +505,12 @@ export default function AccountPage() {
               {gmail.scan_error && (
                 <p className="text-xs text-destructive">Last scan failed: {gmail.scan_error}</p>
               )}
+
+              {gmail.configured === false ? (
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  Gmail credentials are not configured for this deployment. Your saved connection is retained, but scanning is unavailable until the operator fixes the server configuration.
+                </p>
+              ) : null}
 
               {(gmail.scan_status === 'running' || gmail.scan_partial) && (
                 <GmailScanProgress gmail={gmail} compact />
@@ -400,16 +565,58 @@ export default function AccountPage() {
                     by hand. Read-only, and nothing is added without your approval.
                   </p>
                 </div>
-                <Button onClick={handleConnectGmail} disabled={gmailBusy} className="shrink-0">
-                  Connect Gmail
-                </Button>
+                {gmail.configured === false ? (
+                  <span className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                    Not configured
+                  </span>
+                ) : (
+                  <Button onClick={handleConnectGmail} disabled={gmailBusy} className="shrink-0">
+                    Connect Gmail
+                  </Button>
+                )}
               </div>
+              {gmail.configured === false ? (
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  This deployment cannot connect Gmail until its Google OAuth credentials and encryption key are configured.
+                </p>
+              ) : null}
             </div>
           )}
         </div>
       )}
 
-      {/* Section 3 — Account actions */}
+      <div className="rounded-2xl bg-card shadow-sm p-6 space-y-4">
+        <h2 className="text-lg font-semibold">Your data</h2>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium">Download your data</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Export payments, reminders, review findings, preferences, and assistant history as JSON. Secret tokens are excluded.
+            </p>
+          </div>
+          <Button variant="outline" onClick={handleExport} disabled={exportBusy} className="shrink-0">
+            {exportBusy ? 'Preparing…' : 'Download export'}
+          </Button>
+        </div>
+
+        <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium">Delete Subtrack app data</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Permanently deletes your Subtrack records and disconnects Gmail. Your external Supabase sign-in identity remains.
+            </p>
+          </div>
+          <Button
+            variant="destructive"
+            onClick={() => setDeleteDialogOpen(true)}
+            className="shrink-0"
+          >
+            Delete app data
+          </Button>
+        </div>
+      </div>
+
       <div className="rounded-2xl bg-card shadow-sm p-6 space-y-4">
         <h2 className="text-lg font-semibold">Account</h2>
 
@@ -423,6 +630,53 @@ export default function AccountPage() {
           </Button>
         </div>
       </div>
+
+      <Dialog
+        open={deleteDialogOpen}
+        onOpenChange={open => {
+          if (deleteBusy) return
+          setDeleteDialogOpen(open)
+          if (!open) setDeleteConfirmation('')
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete all Subtrack app data?</DialogTitle>
+            <DialogDescription>
+              This permanently removes your payments, reminders, Gmail findings and connection, preferences, and assistant history. It cannot be undone. Your external Supabase sign-in identity is not deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label htmlFor="delete-app-data-confirmation" className="text-sm font-medium">
+              Type <span className="font-mono text-xs">{DELETE_CONFIRMATION}</span> to continue
+            </label>
+            <Input
+              id="delete-app-data-confirmation"
+              autoComplete="off"
+              spellCheck={false}
+              value={deleteConfirmation}
+              onChange={event => setDeleteConfirmation(event.target.value)}
+              aria-invalid={deleteConfirmation.length > 0 && deleteConfirmation !== DELETE_CONFIRMATION}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteDialogOpen(false)}
+              disabled={deleteBusy}
+            >
+              Keep my data
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteData}
+              disabled={deleteBusy || deleteConfirmation !== DELETE_CONFIRMATION}
+            >
+              {deleteBusy ? 'Deleting…' : 'Permanently delete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
     </div>
   )

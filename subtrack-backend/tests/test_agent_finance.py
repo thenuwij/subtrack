@@ -13,6 +13,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 
 from app.agent.finance import (  # noqa: E402
     commitment_changes,
+    duplicate_payments,
     financial_overview,
     list_payments,
     payment_detail,
@@ -30,6 +31,11 @@ from app.models import (  # noqa: E402
     SubscriptionChange,
     UserPreference,
 )
+from app.services.duplicates import (  # noqa: E402
+    _duplicate_cache,
+    _duplicate_cache_lock,
+    persist_duplicate_dismissal,
+)
 
 
 class AgentFinanceTests(unittest.TestCase):
@@ -42,10 +48,14 @@ class AgentFinanceTests(unittest.TestCase):
             user_id="owner", base_currency="AUD", monthly_income=1_000,
         ))
         self.db.commit()
+        with _duplicate_cache_lock:
+            _duplicate_cache.clear()
 
     def tearDown(self):
         self.db.close()
         self.engine.dispose()
+        with _duplicate_cache_lock:
+            _duplicate_cache.clear()
 
     def add_payment(
         self,
@@ -115,9 +125,14 @@ class AgentFinanceTests(unittest.TestCase):
             self.db, "owner", 30, now=datetime(2026, 8, 5, 8, 0),
         )
 
-        self.assertEqual([row["name"] for row in result["charges"]], ["Weekly", "Month end"])
-        self.assertEqual(result["charges"][1]["due_at"], "2026-08-30T09:00:00")
-        self.assertEqual(result["charges"][1]["due_date_source"], "projected_from_recorded_cycle")
+        self.assertEqual(
+            [row["name"] for row in result["charges"]],
+            ["Weekly", "Weekly", "Weekly", "Weekly", "Month end", "Weekly"],
+        )
+        month_end = next(row for row in result["charges"] if row["name"] == "Month end")
+        self.assertEqual(month_end["due_at"], "2026-08-31T09:00:00")
+        self.assertEqual(month_end["due_date_source"], "projected_from_recorded_cycle")
+        self.assertEqual(result["occurrence_count"], 6)
         self.assertEqual(result["missing_due_date_count"], 1)
         self.assertEqual(monthly.next_due, datetime(2026, 6, 30, 9, 0))
 
@@ -162,9 +177,12 @@ class AgentFinanceTests(unittest.TestCase):
             "base": "AUD", "rates": {"USD": 0.65}, "cached": True,
             "stale": False, "fetched_at": "2026-08-05T00:00:00",
         }
-        with patch("app.agent.finance.get_cached_rate_snapshot", return_value=snapshot):
+        with patch(
+            "app.agent.finance.get_cached_rate_snapshot", return_value=snapshot
+        ) as cached_snapshot:
             overview = financial_overview(self.db, "owner")
 
+        cached_snapshot.assert_called_once_with("AUD", db=self.db)
         self.assertEqual(overview["monthly_recurring_total"], 100.0)
         self.assertEqual(overview["currency_conversion"]["status"], "current_rates")
         self.assertEqual(overview["currency_conversion"]["rates_as_of"], "2026-08-05T00:00:00")
@@ -195,6 +213,24 @@ class AgentFinanceTests(unittest.TestCase):
         self.assertEqual([row["merchant"] for row in result["detections"]], ["Cloud tool"])
         self.assertTrue(result["requires_user_review"])
         self.assertIn("excluded from recurring totals", result["scope"])
+
+    def test_assistant_duplicate_read_reuses_cache_and_honours_dismissals(self):
+        first = self.add_payment("Design service", 20)
+        second = self.add_payment("Design service pro", 20)
+        with patch(
+            "app.gmail.analyzer.find_duplicates",
+            return_value=[(0, 1, "Likely the same service")],
+        ) as model:
+            initial = duplicate_payments(self.db, "owner")
+            persist_duplicate_dismissal(
+                self.db, "owner", first.id, second.id,
+            )
+            self.db.commit()
+            filtered = duplicate_payments(self.db, "owner")
+
+        self.assertEqual(initial["suggestion_count"], 1)
+        self.assertEqual(filtered["suggestions"], [])
+        self.assertEqual(model.call_count, 1)
 
 
 if __name__ == "__main__":

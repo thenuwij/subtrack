@@ -273,7 +273,12 @@ def _fetch_batch(service, message_ids: list[str]) -> tuple[list[ReceiptCandidate
         if status == 429 or (status or 0) >= 500:
             retry.append(request_id)
         else:
-            logger.warning("Skipping message %s: %s", request_id, exception)
+            # Gmail message ids and provider exception bodies are mailbox
+            # metadata. Counts and exception classes are enough for operations.
+            logger.warning(
+                "Skipping one Gmail message after a fetch failure (%s)",
+                type(exception).__name__,
+            )
 
     batch = service.new_batch_http_request(callback=handle)
     for message_id in message_ids:
@@ -334,7 +339,7 @@ def _fetch_all(
 
 def scan(
     refresh_token: str,
-    months: int = 6,
+    months: int = 3,
     max_messages: int = 200,
     on_progress=None,
     deadline: float | None = None,

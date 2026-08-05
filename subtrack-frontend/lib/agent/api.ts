@@ -5,12 +5,14 @@ import type {
   AgentStreamEvent,
   AgentThread,
 } from '@/lib/agent/types'
+import { API_URL } from '@/lib/config'
+import { handleExpiredSession, SessionExpiredError } from '@/lib/api'
 
-if (process.env.NODE_ENV === 'production' && !process.env.NEXT_PUBLIC_API_URL) {
-  throw new Error('NEXT_PUBLIC_API_URL must be configured for production builds.')
-}
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
 const JSON_TIMEOUT_MS = 15_000
+// Anthropic requests are bounded server-side, but an interrupted proxy can
+// otherwise leave a browser reader pending forever. This is an inactivity
+// limit, reset whenever an SSE chunk arrives (including tool/status events).
+const STREAM_IDLE_TIMEOUT_MS = 110_000
 
 function headers(token: string) {
   return {
@@ -21,9 +23,16 @@ function headers(token: string) {
 
 async function detailFrom(response: Response) {
   const body = await response.json().catch(() => null)
-  return typeof body?.detail === 'string'
-    ? body.detail
-    : `The Subtrack server returned ${response.status}.`
+  if (typeof body?.detail === 'string') return body.detail
+  if (Array.isArray(body?.detail)) {
+    const messages = body.detail
+      .map((item: unknown) => item && typeof item === 'object' && 'msg' in item
+        ? String((item as { msg: unknown }).msg) : '')
+      .filter(Boolean)
+      .slice(0, 3)
+    if (messages.length) return messages.join(' ')
+  }
+  return `The Subtrack server returned ${response.status}.`
 }
 
 async function jsonRequest<T>(
@@ -47,6 +56,10 @@ async function jsonRequest<T>(
     throw new Error('Could not reach the Subtrack server.')
   } finally {
     window.clearTimeout(timeout)
+  }
+  if (response.status === 401) {
+    await handleExpiredSession()
+    throw new SessionExpiredError()
   }
   if (!response.ok) throw new Error(await detailFrom(response))
   if (response.status === 204) return undefined as T
@@ -112,43 +125,81 @@ interface StreamOptions {
 }
 
 async function streamEvents({ token, path, body, signal, onEvent }: StreamOptions) {
-  const response = await fetch(`${API_URL}${path}`, {
-    method: 'POST',
-    headers: headers(token),
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal,
-  })
-  if (!response.ok) throw new Error(await detailFrom(response))
-  if (!response.body) throw new Error('The assistant returned an empty response.')
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  function consume(block: string) {
-    let eventName = ''
-    const data: string[] = []
-    for (const line of block.split('\n')) {
-      if (line.startsWith('event:')) eventName = line.slice(6).trim()
-      if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
-    }
-    if (!eventName || data.length === 0) return
-    const payload = JSON.parse(data.join('\n'))
-    onEvent({ type: eventName, ...payload } as AgentStreamEvent)
+  const controller = new AbortController()
+  let timedOut = false
+  let idleTimeout = 0
+  const callerAbort = () => controller.abort()
+  const resetIdleTimeout = () => {
+    window.clearTimeout(idleTimeout)
+    idleTimeout = window.setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, STREAM_IDLE_TIMEOUT_MS)
   }
 
-  while (true) {
-    const { value, done } = await reader.read()
-    buffer += decoder.decode(value, { stream: !done }).replaceAll('\r\n', '\n')
-    let boundary = buffer.indexOf('\n\n')
-    while (boundary >= 0) {
-      consume(buffer.slice(0, boundary))
-      buffer = buffer.slice(boundary + 2)
-      boundary = buffer.indexOf('\n\n')
+  if (signal?.aborted) throw new DOMException('The request was stopped.', 'AbortError')
+  signal?.addEventListener('abort', callerAbort, { once: true })
+  resetIdleTimeout()
+
+  try {
+    const response = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      headers: headers(token),
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    })
+    resetIdleTimeout()
+    if (response.status === 401) {
+      await handleExpiredSession()
+      throw new SessionExpiredError()
     }
-    if (done) break
+    if (!response.ok) throw new Error(await detailFrom(response))
+    if (!response.body) throw new Error('The assistant returned an empty response.')
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    function consume(block: string) {
+      let eventName = ''
+      const data: string[] = []
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event:')) eventName = line.slice(6).trim()
+        if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
+      }
+      if (!eventName || data.length === 0) return
+      const payload = JSON.parse(data.join('\n'))
+      onEvent({ type: eventName, ...payload } as AgentStreamEvent)
+    }
+
+    while (true) {
+      const { value, done } = await reader.read()
+      resetIdleTimeout()
+      buffer += decoder.decode(value, { stream: !done }).replaceAll('\r\n', '\n')
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        consume(buffer.slice(0, boundary))
+        buffer = buffer.slice(boundary + 2)
+        boundary = buffer.indexOf('\n\n')
+      }
+      if (done) break
+    }
+    if (buffer.trim()) consume(buffer)
+  } catch (error) {
+    if (timedOut) {
+      throw new Error('The assistant took too long to respond. Please retry your message.')
+    }
+    if (signal?.aborted) {
+      throw new DOMException('The request was stopped.', 'AbortError')
+    }
+    if (error instanceof TypeError) {
+      throw new Error('The connection to the assistant was interrupted. Please retry.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(idleTimeout)
+    signal?.removeEventListener('abort', callerAbort)
   }
-  if (buffer.trim()) consume(buffer)
 }
 
 export function sendAgentMessage(

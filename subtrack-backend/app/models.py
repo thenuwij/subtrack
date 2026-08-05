@@ -1,5 +1,6 @@
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Enum,
@@ -23,7 +24,43 @@ class BillingCycle(str, enum.Enum):
     monthly = "monthly"
     yearly = "yearly"
 
+
+class RecurrenceUnit(str, enum.Enum):
+    """Calendar unit used by the flexible cadence model.
+
+    ``BillingCycle`` remains in the schema during the compatibility window so
+    an older application instance can still read every row. New calculations
+    use ``interval_unit`` + ``interval_count`` exclusively.
+    """
+
+    day = "day"
+    week = "week"
+    month = "month"
+    year = "year"
+
+
+class PaymentStatus(str, enum.Enum):
+    active = "active"
+    paused = "paused"
+    cancelling = "cancelling"
+    cancelled = "cancelled"
+    ended = "ended"
+
+
+class AmountType(str, enum.Enum):
+    fixed = "fixed"
+    variable = "variable"
+
+
+class SpendingType(str, enum.Enum):
+    unspecified = "unspecified"
+    essential = "essential"
+    optional = "optional"
+
 class Category(str, enum.Enum):
+    housing = "housing"
+    insurance = "insurance"
+    phone_internet = "phone_internet"
     streaming = "streaming"
     software = "software"
     cloud = "cloud"
@@ -31,10 +68,42 @@ class Category(str, enum.Enum):
     fitness = "fitness"
     food = "food"
     transport = "transport"
+    education = "education"
+    childcare = "childcare"
+    debt = "debt"
+    memberships = "memberships"
+    donations = "donations"
+    business = "business"
     other = "other"
 
 class Subscription(Base):
     __tablename__ = "subscriptions"
+    __table_args__ = (
+        CheckConstraint(
+            "(interval_unit IS NULL AND interval_count IS NULL) OR "
+            "(interval_unit IS NOT NULL AND interval_count IS NOT NULL "
+            "AND interval_count >= 1 AND interval_count <= 1200)",
+            name="ck_subscriptions_cadence_pair",
+        ),
+        CheckConstraint(
+            "interval_unit IS NULL OR interval_unit IN ('day', 'week', 'month', 'year')",
+            name="ck_subscriptions_interval_unit",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'paused', 'cancelling', 'cancelled', 'ended')",
+            name="ck_subscriptions_status",
+        ),
+        CheckConstraint(
+            "amount_type IN ('fixed', 'variable')",
+            name="ck_subscriptions_amount_type",
+        ),
+        CheckConstraint(
+            "spending_type IN ('unspecified', 'essential', 'optional')",
+            name="ck_subscriptions_spending_type",
+        ),
+        Index("ix_subscriptions_user_status_due", "user_id", "status", "next_due"),
+        Index("ix_subscriptions_user_active_name", "user_id", "is_active", "name"),
+    )
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(String, nullable=False, index=True)
     name = Column(String, nullable=False)
@@ -64,16 +133,80 @@ class Subscription(Base):
     source_domain = Column(String, nullable=True, index=True)
     source_key = Column(String, nullable=True, index=True)
     currency = Column(String, default="AUD")
-    exchange_rate = Column(Float, default=1.0)        # rate used at time of entry
+    # Null means no honest server-side conversion was available. Never use 1.0
+    # as a cross-currency fallback.
+    exchange_rate = Column(Float, nullable=True)      # native -> stored-base rate
     converted_amount = Column(Float, nullable=True)   # amount in user's base currency
+    # Legacy compatibility field. Flexible cadence is represented by the unit
+    # and positive interval below; e.g. quarterly is 3 months and fortnightly
+    # is 2 weeks. Do not use ``cycle`` for calculations in new code.
     cycle = Column(Enum(BillingCycle), nullable=False)
+    # Nullable only for rolling-deploy compatibility with the previous backend.
+    # Every create/update in the new API writes both fields; null pairs fall
+    # back to the legacy cycle and can be backfilled safely.
+    interval_unit = Column(String(12), nullable=True)
+    interval_count = Column(Integer, nullable=True)
     next_due = Column(DateTime, nullable=True)
+    recurrence_end_at = Column(DateTime, nullable=True)
     # Present when this recurring payment began as a free trial.  ``amount``
     # remains the price that will be charged after the trial; dashboards omit
     # future trials from current paid totals until this date passes.
     trial_ends_at = Column(DateTime, nullable=True)
+    status = Column(String(24), nullable=False, default="active")
+    paused_until = Column(DateTime, nullable=True)
+    cancellation_effective_at = Column(DateTime, nullable=True)
+    amount_type = Column(String(16), nullable=False, default="fixed")
+    spending_type = Column(String(16), nullable=False, default="unspecified")
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class DuplicateDismissal(Base):
+    """A user's durable decision that two tracked records are distinct.
+
+    Pair IDs are stored in canonical lexical order by every write path. The
+    uniqueness constraint makes repeated clicks and assistant action replays
+    idempotent, while cascading foreign keys remove obsolete decisions when
+    either tracked record is deleted or merged.
+    """
+
+    __tablename__ = "duplicate_dismissals"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "subscription_a_id", "subscription_b_id",
+            name="uq_duplicate_dismissals_user_pair",
+        ),
+        CheckConstraint(
+            "subscription_a_id <> subscription_b_id",
+            name="ck_duplicate_dismissals_distinct_pair",
+        ),
+        Index(
+            "ix_duplicate_dismissals_user_created",
+            "user_id", "created_at",
+        ),
+        Index(
+            "ix_duplicate_dismissals_subscription_a",
+            "subscription_a_id",
+        ),
+        Index(
+            "ix_duplicate_dismissals_subscription_b",
+            "subscription_b_id",
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, nullable=False)
+    subscription_a_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    subscription_b_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
 
 class ChangeKind(str, enum.Enum):
     added = "added"
@@ -87,6 +220,9 @@ class SubscriptionChange(Base):
     it could never answer "what changed since last month", which is the whole point.
     """
     __tablename__ = "subscription_changes"
+    __table_args__ = (
+        Index("ix_subscription_changes_user_changed", "user_id", "changed_at"),
+    )
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(String, nullable=False, index=True)
     subscription_id = Column(UUID(as_uuid=True), nullable=False, index=True)
@@ -102,6 +238,7 @@ class GmailAccount(Base):
     __tablename__ = "gmail_accounts"
     __table_args__ = (
         Index("ix_gmail_accounts_scan_heartbeat", "scan_status", "scan_heartbeat_at"),
+        Index("ix_gmail_accounts_scan_started", "scan_status", "scan_started_at"),
     )
     user_id = Column(String, primary_key=True)        # Supabase user ID
     email_address = Column(String, nullable=False)
@@ -123,6 +260,30 @@ class GmailAccount(Base):
     scan_message = Column(String(300), nullable=True)
 
 
+class GmailOAuthState(Base):
+    """One pending, authenticated Gmail connection handshake.
+
+    The browser-visible OAuth state is stored only as a SHA-256 digest. The
+    PKCE verifier is encrypted with the same deployment key as refresh tokens
+    and the row is deleted before the authorization code is exchanged.
+    """
+
+    __tablename__ = "gmail_oauth_states"
+    __table_args__ = (
+        CheckConstraint(
+            "length(state_hash) = 64",
+            name="ck_gmail_oauth_states_hash_length",
+        ),
+        Index("ix_gmail_oauth_states_user_expires", "user_id", "expires_at"),
+        Index("ix_gmail_oauth_states_expires", "expires_at"),
+    )
+
+    state_hash = Column(String(64), primary_key=True)
+    user_id = Column(String, nullable=False)
+    code_verifier_encrypted = Column(Text, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+
 class DetectionStatus(str, enum.Enum):
     pending = "pending"
     approved = "approved"
@@ -136,13 +297,59 @@ class DetectedSubscription(Base):
     email parsing is noisy, and one wrong entry makes the total untrustworthy.
     """
     __tablename__ = "detected_subscriptions"
+    __table_args__ = (
+        CheckConstraint(
+            "(interval_unit IS NULL AND interval_count IS NULL) OR "
+            "(interval_unit IS NOT NULL AND interval_count IS NOT NULL "
+            "AND interval_count >= 1 AND interval_count <= 1200)",
+            name="ck_detected_subscriptions_cadence_pair",
+        ),
+        CheckConstraint(
+            "interval_unit IS NULL OR interval_unit IN ('day', 'week', 'month', 'year')",
+            name="ck_detected_subscriptions_interval_unit",
+        ),
+        CheckConstraint(
+            "cadence_confidence IN ('high', 'medium', 'unknown')",
+            name="ck_detected_subscriptions_cadence_confidence",
+        ),
+        CheckConstraint(
+            "due_date_confidence IN ('high', 'medium', 'unknown')",
+            name="ck_detected_subscriptions_due_confidence",
+        ),
+        CheckConstraint(
+            "amount_type IN ('fixed', 'variable')",
+            name="ck_detected_subscriptions_amount_type",
+        ),
+        Index(
+            "ix_detected_subscriptions_user_status_charge",
+            "user_id", "status", "charge_count", "detected_at",
+        ),
+    )
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(String, nullable=False, index=True)
     merchant = Column(String, nullable=False)
     sender_domain = Column(String, nullable=False)
     product_key = Column(String, nullable=False, default="")   # stable across scans
     category = Column(Enum(Category), default=Category.other)
+    # ``cycle`` remains non-null for compatibility with the previous release.
+    # A detection whose cadence is unknown stores no interval unit/count and
+    # must be corrected before approval; new code never treats the compatibility
+    # cycle as evidence of a known cadence.
     cycle = Column(Enum(BillingCycle), nullable=False)
+    interval_unit = Column(String(12), nullable=True)
+    interval_count = Column(Integer, nullable=True)
+    # Python writes ``unknown`` explicitly for genuinely uncertain new Gmail
+    # findings. The temporary database default stays ``medium`` so a previous
+    # backend binary writing only the legacy cycle during a rolling deployment
+    # remains distinguishable and readable by the new release.
+    cadence_confidence = Column(
+        String(16), nullable=False, default="unknown", server_default="medium",
+    )
+    cadence_evidence = Column(String(300), nullable=True)
+    next_due = Column(DateTime, nullable=True)
+    due_date_confidence = Column(String(16), nullable=False, default="unknown")
+    due_date_evidence = Column(String(300), nullable=True)
+    amount_type = Column(String(16), nullable=False, default="fixed")
     amount = Column(Float, nullable=False)
     currency = Column(String, default="AUD")
     previous_amount = Column(Float, nullable=True)
@@ -169,7 +376,34 @@ class UserPreference(Base):
     user_id = Column(String, primary_key=True)        # Supabase user ID
     base_currency = Column(String, default="AUD")
     monthly_income = Column(Float, nullable=True)     # in base currency; drives share-of-income
+    timezone = Column(String(64), nullable=False, default="UTC")
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ExchangeRateSnapshot(Base):
+    """Small shared cache of provider rates, one bounded row per base currency."""
+
+    __tablename__ = "exchange_rate_snapshots"
+    __table_args__ = (
+        CheckConstraint(
+            "base_currency IN ('AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY')",
+            name="ck_exchange_rate_snapshots_supported_base",
+        ),
+    )
+
+    base_currency = Column(String(3), primary_key=True)
+    rates = Column(JSON, nullable=False)
+    provider = Column(String(32), nullable=False, default="frankfurter")
+    # Frankfurter publishes the market date separately from the time Subtrack
+    # fetched it (weekends commonly return Friday's market date).
+    provider_date = Column(String(10), nullable=True)
+    fetched_at = Column(DateTime, nullable=False)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
 
 class PaymentReminder(Base):
@@ -184,6 +418,10 @@ class PaymentReminder(Base):
     __table_args__ = (
         Index("ix_payment_reminders_user_active", "user_id", "is_active"),
         Index("ix_payment_reminders_user_subscription", "user_id", "subscription_id"),
+        Index(
+            "ix_payment_reminders_user_active_created",
+            "user_id", "is_active", "created_at",
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -210,6 +448,10 @@ class AgentThread(Base):
     __tablename__ = "agent_threads"
     __table_args__ = (
         Index("ix_agent_threads_user_updated", "user_id", "updated_at"),
+        Index(
+            "ix_agent_threads_user_archived_updated",
+            "user_id", "archived", "updated_at",
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -248,6 +490,12 @@ class AgentMessage(Base):
         ),
         Index("ix_agent_messages_thread_sequence", "thread_id", "sequence"),
         Index("ix_agent_messages_user_thread", "user_id", "thread_id"),
+        Index(
+            "ix_agent_messages_user_role_created",
+            "user_id", "role", "created_at",
+        ),
+        Index("ix_agent_messages_status_updated", "status", "updated_at"),
+        Index("ix_agent_messages_reply_sequence", "reply_to_id", "sequence"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

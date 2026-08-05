@@ -1,32 +1,60 @@
 import logging
+import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text
+
 from app.config import settings
 from app.database import engine
-from app.routers import subscriptions, rates, preferences, agent, gmail, detected, reminders
-
+from app.routers import (
+    account,
+    agent,
+    detected,
+    gmail,
+    meta,
+    preferences,
+    rates,
+    reminders,
+    subscriptions,
+)
+from app.routers.meta import release_metadata
 
 # Logging config
 logging.basicConfig(
-    level = logging.INFO,
-    format = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    datefmt= "%Y-%m-%d %H:%M:%S",
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+_ALLOWED_ORIGINS = tuple(
+    origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()
+)
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
-app = FastAPI(title="Subtrack API")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    on_startup()
+    try:
+        yield
+    finally:
+        on_shutdown()
+
+
+app = FastAPI(title="Subtrack API", lifespan=lifespan)
 
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in settings.allowed_origins.split(",") if origin.strip()],
+    allow_origins=list(_ALLOWED_ORIGINS),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,26 +64,83 @@ app.add_middleware(
 app.include_router(subscriptions.router)
 app.include_router(rates.router)
 app.include_router(preferences.router)
+app.include_router(account.router)
 app.include_router(agent.router)
 app.include_router(gmail.router)
 app.include_router(detected.router)
 app.include_router(reminders.router)
+app.include_router(meta.router)
 
 
 @app.middleware("http")
 async def protect_api_responses(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Request-ID"] = str(uuid4())
+    request_id = str(uuid4())
+    started_at = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        # Never log the query string: the Gmail callback contains a short-lived
+        # authorization code and OAuth state in its URL parameters.
+        logger.exception(
+            "Unhandled API error for %s %s request_id=%s",
+            request.method,
+            request.url.path,
+            request_id,
+        )
+        response = JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error", "request_id": request_id},
+        )
+        _apply_error_cors(request, response)
+
+    _apply_response_headers(response, request_id)
+    if request.url.path != "/health/ready":
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        logger.info(
+            "%s %s %d %.1fms request_id=%s",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+            request_id,
+        )
     return response
 
-@app.on_event("startup")
+
+def _apply_response_headers(response: Response, request_id: str) -> None:
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if settings.environment == "production":
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    response.headers["X-Request-ID"] = request_id
+
+
+def _apply_error_cors(request: Request, response: Response) -> None:
+    """Keep browser-visible 500s diagnosable without opening CORS broadly."""
+    origin = request.headers.get("origin")
+    if origin not in _ALLOWED_ORIGINS:
+        return
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    vary = {
+        item.strip()
+        for item in response.headers.get("Vary", "").split(",")
+        if item.strip()
+    }
+    vary.add("Origin")
+    response.headers["Vary"] = ", ".join(sorted(vary))
+
+
 def on_startup():
     # A bad encryption key makes every Gmail scan fail. Surface it at boot,
     # where a deploy can catch it, instead of at a user's first scan.
     if settings.google_client_id:
         from app.gmail.crypto import check_configured
+
         check_configured()
 
     # Only stale work is failed. Marking every running row at boot breaks as
@@ -63,16 +148,25 @@ def on_startup():
     # healthy work owned by another one.
     from app.database import SessionLocal
     from app.models import AgentAction, AgentMessage, GmailAccount
-    from app.routers.gmail import INTERRUPTED_MESSAGE, STALE_SCAN_MINUTES
+    from app.routers.gmail import (
+        INTERRUPTED_MESSAGE,
+        SCAN_TIME_LIMIT_SECONDS,
+        STALE_SCAN_MINUTES,
+    )
+
     db = SessionLocal()
     try:
         gmail_cutoff = _utcnow() - timedelta(minutes=STALE_SCAN_MINUTES)
+        gmail_total_cutoff = _utcnow() - timedelta(
+            seconds=SCAN_TIME_LIMIT_SECONDS + 15,
+        )
         interrupted = (
             db.query(GmailAccount)
             .filter(
                 GmailAccount.scan_status == "running",
                 (
                     (GmailAccount.scan_heartbeat_at < gmail_cutoff)
+                    | (GmailAccount.scan_started_at < gmail_total_cutoff)
                     | (
                         GmailAccount.scan_heartbeat_at.is_(None)
                         & (GmailAccount.scan_started_at < gmail_cutoff)
@@ -83,32 +177,43 @@ def on_startup():
                     )
                 ),
             )
-            .update({
-                "scan_status": "error",
-                "scan_error": INTERRUPTED_MESSAGE,
-                "scan_stage": None,
-            }, synchronize_session=False)
+            .update(
+                {
+                    "scan_status": "error",
+                    "scan_error": INTERRUPTED_MESSAGE,
+                    "scan_stage": None,
+                },
+                synchronize_session=False,
+            )
         )
         if interrupted:
             db.commit()
-            logger.warning("Marked %d interrupted scan(s) as failed at startup", interrupted)
+            logger.warning(
+                "Marked %d interrupted scan(s) as failed at startup", interrupted
+            )
 
         agent_cutoff = _utcnow() - timedelta(minutes=10)
         interrupted_message_ids = [
-            row[0] for row in db.query(AgentMessage.id).filter(
+            row[0]
+            for row in db.query(AgentMessage.id)
+            .filter(
                 AgentMessage.status == "streaming",
                 AgentMessage.updated_at < agent_cutoff,
-            ).all()
+            )
+            .all()
         ]
         if interrupted_message_ids:
             db.query(AgentAction).filter(
                 AgentAction.assistant_message_id.in_(interrupted_message_ids),
                 AgentAction.status == "pending",
-            ).update({
-                "status": "failed",
-                "error_code": "response_failed",
-                "error_message": "The assistant response was interrupted. Ask again to recreate this action.",
-            }, synchronize_session=False)
+            ).update(
+                {
+                    "status": "failed",
+                    "error_code": "response_failed",
+                    "error_message": "The assistant response was interrupted. Ask again to recreate this action.",
+                },
+                synchronize_session=False,
+            )
 
         interrupted_replies = (
             db.query(AgentMessage)
@@ -116,10 +221,12 @@ def on_startup():
                 AgentMessage.status == "streaming",
                 AgentMessage.updated_at < agent_cutoff,
             )
-            .update({
-                "status": "failed",
-                "error_code": "stream_interrupted",
-            })
+            .update(
+                {
+                    "status": "failed",
+                    "error_code": "stream_interrupted",
+                }
+            )
         )
         if interrupted_replies:
             db.commit()
@@ -133,18 +240,19 @@ def on_startup():
     logger.info("Subtrack API started")
 
 
-@app.on_event("shutdown")
 def on_shutdown():
     from app.routers.gmail import shutdown_scan_executor
+
     shutdown_scan_executor()
+
 
 @app.get("/")
 def health_check():
-    return {"status": "ok", "app": "Subtrack API"}
+    return {"status": "ok", "app": "Subtrack API", "release": release_metadata()}
 
 
 @app.get("/health/ready")
 def readiness_check():
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
-    return {"status": "ready", "app": "Subtrack API"}
+    return {"status": "ready", "app": "Subtrack API", "release": release_metadata()}

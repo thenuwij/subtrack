@@ -1,12 +1,11 @@
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from alembic import context
+from app import models  # noqa: F401 — registers every model with Base.metadata
 from app.config import settings
 from app.database import Base
-from app import models  # noqa: F401 — registers every model with Base.metadata
-
 
 config = context.config
 # ConfigParser treats percent signs as interpolation markers. Escaping here
@@ -37,6 +36,9 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={"connect_timeout": settings.database_connect_timeout}
+        if not settings.database_url.startswith("sqlite")
+        else {},
     )
 
     with connectable.connect() as connection:
