@@ -48,7 +48,9 @@ export default function Home() {
             Subtrack brings subscriptions, bills, memberships, and free trials into one clear monthly view—with an AI assistant that understands the page you are on.
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-            <Button asChild size="lg"><Link href="/login">Start with Google</Link></Button>
+            {/* Not "Start with Google" any more — email sign-up exists, and
+                naming only one provider reads as though it is the only way in. */}
+            <Button asChild size="lg"><Link href="/login">Get started</Link></Button>
             <Button asChild size="lg" variant="outline"><Link href="/privacy">How your data is handled</Link></Button>
           </div>
           <p className="mt-4 text-xs leading-5 text-muted-foreground">

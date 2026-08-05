@@ -52,12 +52,22 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const isAuthPage = request.nextUrl.pathname.startsWith('/login')
+  const isRoot = request.nextUrl.pathname === '/'
   const isProtectedPage = ['/dashboard', '/subscriptions', '/review', '/assistant', '/account'].some(
     path => request.nextUrl.pathname.startsWith(path)
   )
 
   if (!user && isProtectedPage) {
     return redirectKeepingSession('/login')
+  }
+
+  // One way in. The marketing page and the sign-in page both greeted arrivals
+  // with a "sign in" button, so everyone paid a click to reach the page they
+  // were always going to. The sign-in page already carries the pitch beside
+  // the form, so the root now resolves to wherever the visitor actually
+  // belongs. app/page.tsx is untouched and one line away from returning.
+  if (isRoot) {
+    return redirectKeepingSession(user ? '/dashboard' : '/login')
   }
 
   if (user && isAuthPage) {
@@ -68,5 +78,13 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/subscriptions/:path*', '/review/:path*', '/assistant/:path*', '/account/:path*', '/login'],
+  matcher: [
+    '/',
+    '/dashboard/:path*',
+    '/subscriptions/:path*',
+    '/review/:path*',
+    '/assistant/:path*',
+    '/account/:path*',
+    '/login',
+  ],
 }

@@ -149,6 +149,15 @@ export default function ReviewPage() {
     return () => window.removeEventListener('subtrack:data-changed', refresh)
   }, [load])
 
+  // The Gmail handshake finishes on a throwaway callback page and sends the
+  // user here, so the confirmation has to be picked up on arrival — otherwise
+  // a connection that just succeeded looks like nothing happened.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('gmail') !== 'connected') return
+    toast.success('Gmail connected')
+    window.history.replaceState({}, '', window.location.pathname)
+  }, [])
+
   // Per-detection share of the bill. A receipt shows the whole cost, but the
   // user may only pay part of it (rent split with housemates, a shared energy
   // bill), so the split is chosen at review time.
@@ -452,7 +461,12 @@ export default function ReviewPage() {
               disabled={scanning || rescanStarting || busy !== null}
               className="shrink-0"
             >
-              {scanning || rescanStarting ? 'Scanning…' : 'Rescan inbox'}
+              {scanning || rescanStarting
+                ? 'Scanning…'
+                // "Rescan" to someone who has never scanned reads as though
+                // they missed a step — and arriving straight from connecting
+                // Gmail, they always have.
+                : gmail.last_scanned_at ? 'Rescan inbox' : 'Scan inbox'}
             </Button>
           )}
         </section>

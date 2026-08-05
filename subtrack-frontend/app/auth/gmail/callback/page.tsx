@@ -51,7 +51,14 @@ export default function GmailCallbackPage() {
           return
         }
         await completeGmailOAuth(session.access_token, { code, state })
-        router.replace('/account?gmail=connected')
+        // Land on review, not account. Connecting Gmail is a means to an end —
+        // seeing what was found — and the account page is where the user
+        // happened to click the button, not where they were trying to get to.
+        // Review is also the page that renders scan progress, so the next step
+        // is in front of them instead of somewhere they have to navigate to.
+        // Failures still route to /account, which owns the error panel and the
+        // Connect button needed to try again.
+        router.replace('/review?gmail=connected')
       } catch (error) {
         // request() owns the expired-session redirect. Do not race it with an
         // account redirect after it has cleared the stale local credentials.
