@@ -32,9 +32,23 @@ import {
 import { Input } from '@/components/ui/input'
 
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
+/** Keyed by the code the Gmail callback forwards: Google's own OAuth error,
+ *  the backend's `invalid_oauth_response`, or one of our own outcomes. */
 const GMAIL_ERROR_MESSAGES: Record<string, string> = {
   cancelled: 'Google sign-in was cancelled. Nothing was connected.',
+  access_denied:
+    'You declined the Google permission request, so nothing was connected. '
+    + 'Connect again and allow read access to continue.',
+  invalid_scope:
+    'Google would not grant the permission Subtrack asked for. Connect again, '
+    + 'and make sure the tickbox for viewing your email is ticked.',
+  invalid_oauth_response:
+    'Google’s reply could not be verified, so it was rejected. This is '
+    + 'usually a stale or reused link — connect again from this page.',
   invalid_response: 'Google returned an invalid connection response. Please start again.',
+  server_error: 'Google had a problem on its side. Try connecting again in a moment.',
+  temporarily_unavailable:
+    'Google is temporarily unavailable. Try connecting again in a moment.',
   connection_failed: 'Gmail could not be connected. Please start again.',
 }
 const DELETE_CONFIRMATION = 'DELETE MY SUBTRACK DATA' as const
@@ -568,6 +582,15 @@ export default function AccountPage() {
                   <p className="text-xs text-muted-foreground mt-0.5">
                     Find recurring payments from your receipt emails instead of adding them
                     by hand. Read-only, and nothing is added without your approval.
+                  </p>
+                  {/* Google renders read access to Gmail as its own tickbox and
+                      leaves it unticked. Continuing past it returns a valid
+                      token that cannot read any mail, so the connection fails
+                      at the last step — by far the most common first attempt.
+                      Saying so up front is cheaper than explaining it after. */}
+                  <p className="text-xs text-muted-foreground mt-1.5">
+                    Google will show a tickbox for viewing your email. It starts
+                    unticked — tick it, or the connection can&apos;t be completed.
                   </p>
                 </div>
                 {gmail.configured === false ? (

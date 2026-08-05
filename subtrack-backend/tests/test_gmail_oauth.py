@@ -278,3 +278,144 @@ class GmailOAuthSecurityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GmailScopeReportingTests(GmailOAuthSecurityTests):
+    """Google reports granted scopes inconsistently; only a real refusal counts.
+
+    Read access to Gmail is a Google "restricted" scope, so consent renders it
+    as its own tickbox that starts unticked. Continuing past it returns a
+    perfectly valid token that cannot read mail, which is the most common way
+    a first connection attempt fails — so this check has to be exact in both
+    directions: never accept a genuine refusal, never invent one.
+    """
+
+    def _expect_refusal(self, credentials):
+        _, state = self.start()
+        with (
+            patch.object(gmail, "_build_flow", return_value=FakeFlow(credentials)),
+            self.assertRaises(HTTPException) as caught,
+        ):
+            gmail.gmail_oauth_complete(
+                gmail.GmailOAuthComplete(code="google-code", state=state),
+                user_id="owner",
+                db=self.db,
+            )
+        return caught.exception
+
+    def test_an_omitted_scope_means_the_requested_set_was_granted(self):
+        # Per OAuth, no `scope` in the token response means "as requested".
+        result, _, _ = self.complete(
+            self.start()[1],
+            flow=FakeFlow(self.credentials(granted_scopes=None)),
+        )
+
+        self.assertTrue(result["connected"])
+
+    def test_an_empty_scope_is_treated_as_omitted_rather_than_a_refusal(self):
+        # Google does not issue a token at all when nothing is granted, so an
+        # empty value is the omitted case. Reading it literally rejected a
+        # connection that had actually succeeded.
+        for empty in ([], ""):
+            with self.subTest(empty=empty):
+                result, _, _ = self.complete(
+                    self.start()[1],
+                    flow=FakeFlow(self.credentials(granted_scopes=empty)),
+                )
+                self.assertTrue(result["connected"])
+                self.db.query(GmailAccount).delete()
+                self.db.commit()
+
+    def test_the_unticked_gmail_box_is_still_refused_and_says_so(self):
+        # The other scopes come back; only read access was left unticked.
+        exc = self._expect_refusal(self.credentials(
+            granted_scopes=["openid", "https://www.googleapis.com/auth/userinfo.email"],
+        ))
+
+        self.assertEqual(exc.status_code, 422)
+        # The message has to name the tickbox — "allow access" left users
+        # re-running the same flow and failing the same way.
+        self.assertIn("tickbox", exc.detail.lower())
+        self.assertEqual(self.db.query(GmailAccount).count(), 0)
+
+    def test_a_scope_string_is_accepted_in_place_of_a_list(self):
+        result, _, _ = self.complete(
+            self.start()[1],
+            flow=FakeFlow(self.credentials(granted_scopes=" ".join(gmail.SCOPES))),
+        )
+
+        self.assertTrue(result["connected"])
+
+
+class GmailReconnectLifecycleTests(GmailOAuthSecurityTests):
+    """Disconnecting must leave nothing behind that breaks the next connect."""
+
+    def _connect(self, email: str = "owner@gmail.com"):
+        _, state = self.start()
+        flow = FakeFlow(self.credentials())
+        with (
+            patch.object(gmail, "_build_flow", return_value=flow),
+            patch.object(gmail, "_verify_google_identity", return_value=email),
+        ):
+            return gmail.gmail_oauth_complete(
+                gmail.GmailOAuthComplete(code="google-code", state=state),
+                user_id="owner",
+                db=self.db,
+            )
+
+    def test_disconnect_clears_pending_state_so_a_stale_link_cannot_reconnect(self):
+        self._connect()
+        # A half-finished attempt left open in another tab.
+        _, stale_state = self.start()
+        self.assertEqual(self.db.query(GmailOAuthState).count(), 1)
+
+        with patch.object(gmail, "revoke_encrypted_refresh_token") as revoke:
+            revoke.return_value = SimpleNamespace(value="revoked")
+            gmail.gmail_disconnect(user_id="owner", db=self.db)
+
+        self.assertEqual(self.db.query(GmailAccount).count(), 0)
+        self.assertEqual(self.db.query(GmailOAuthState).count(), 0)
+
+        # The stale link must fail closed rather than silently reattaching.
+        with (
+            patch.object(gmail, "_build_flow", return_value=FakeFlow(self.credentials())),
+            self.assertRaises(HTTPException) as caught,
+        ):
+            gmail.gmail_oauth_complete(
+                gmail.GmailOAuthComplete(code="google-code", state=stale_state),
+                user_id="owner",
+                db=self.db,
+            )
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_reconnecting_a_different_mailbox_replaces_the_stored_identity(self):
+        self._connect("first@gmail.com")
+        with patch.object(gmail, "revoke_encrypted_refresh_token") as revoke:
+            revoke.return_value = SimpleNamespace(value="revoked")
+            gmail.gmail_disconnect(user_id="owner", db=self.db)
+
+        result = self._connect("second@gmail.com")
+
+        self.assertEqual(result["email_address"], "second@gmail.com")
+        accounts = self.db.query(GmailAccount).all()
+        self.assertEqual(len(accounts), 1)
+        self.assertEqual(accounts[0].email_address, "second@gmail.com")
+
+    def test_a_refused_connection_leaves_no_account_to_confuse_the_retry(self):
+        _, state = self.start()
+        with (
+            patch.object(gmail, "_build_flow", return_value=FakeFlow(
+                self.credentials(granted_scopes=["openid"]))),
+            self.assertRaises(HTTPException),
+        ):
+            gmail.gmail_oauth_complete(
+                gmail.GmailOAuthComplete(code="google-code", state=state),
+                user_id="owner",
+                db=self.db,
+            )
+
+        self.assertEqual(self.db.query(GmailAccount).count(), 0)
+        self.assertEqual(self.db.query(GmailOAuthState).count(), 0)
+        # Retrying from scratch must work — this is the second attempt that
+        # users report succeeding after they notice the tickbox.
+        self.assertTrue(self._connect()["connected"])

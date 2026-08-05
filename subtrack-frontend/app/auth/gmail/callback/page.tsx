@@ -30,7 +30,13 @@ export default function GmailCallbackPage() {
 
     async function complete() {
       if (providerError) {
-        router.replace('/account?gmail_error=cancelled')
+        // Not every failure here is a cancellation. The backend forwards
+        // Google's own error code, plus its own `invalid_oauth_response` when
+        // the state or code fails validation — reporting all of those as
+        // "you cancelled" told users they'd done something they hadn't, and
+        // hid the ones that need a different fix. The code is already
+        // constrained to [A-Za-z0-9_.-] before it reaches the browser.
+        router.replace(`/account?gmail_error=${encodeURIComponent(providerError)}`)
         return
       }
       if (!code || !state) {

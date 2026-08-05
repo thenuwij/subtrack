@@ -433,18 +433,26 @@ def gmail_oauth_complete(
         ) from exc
 
     # Per OAuth, an omitted response scope means it equals the requested set;
-    # when Google returns a reduced set, granted_scopes is authoritative.
-    granted = (
-        _scope_set(credentials.granted_scopes)
-        if credentials.granted_scopes is not None
-        else _scope_set(credentials.scopes)
-    )
+    # when Google returns a reduced set, granted_scopes is authoritative. An
+    # empty value is the omitted case rather than "nothing was granted" —
+    # Google does not issue a token at all when the user grants nothing — so it
+    # falls back too. Reading it literally produced a false refusal on a
+    # connection that had actually succeeded.
+    reported = _scope_set(credentials.granted_scopes)
+    granted = reported or _scope_set(credentials.scopes)
     if GMAIL_READONLY not in granted:
+        # Gmail read access is a Google "restricted" scope, so consent renders
+        # it as its own checkbox that starts unticked. Continuing past it
+        # returns a perfectly valid token that cannot read any mail, which is
+        # why this is the most common first-attempt failure. Name the checkbox
+        # rather than saying "allow access" — the user has to find that box.
         raise HTTPException(
             status_code=422,
             detail=(
-                "Gmail read access was not granted. Start again and allow "
-                "Subtrack to view email messages."
+                "Google did not grant permission to read your email. On the "
+                "consent screen there is a tickbox for viewing your email "
+                "messages — it starts unticked, and Subtrack cannot scan "
+                "without it. Connect again and tick that box."
             ),
         )
 
