@@ -1,7 +1,12 @@
 import os
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 from unittest.mock import patch
+
+import anthropic
+import httpx
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -150,3 +155,108 @@ class GmailScanPipelineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnalysisRetryTests(unittest.TestCase):
+    """A momentary rate limit must not discard a whole batch of domains.
+
+    The SDK's own retries are off so one slow call cannot overrun the scan
+    budget. That left zero tolerance: a single 429 — which comes back in
+    milliseconds — threw away all eight sender domains in the call, and three
+    unlucky calls failed the entire scan.
+    """
+
+    def setUp(self):
+        self.calls = 0
+        self.slept = []
+
+    def _patched(self, side_effects, deadline=None):
+        """Run _analyze_chunk against a stubbed client, counting attempts."""
+        import app.gmail.analyzer as az
+
+        def fake_parse(**kwargs):
+            outcome = side_effects[min(self.calls, len(side_effects) - 1)]
+            self.calls += 1
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        stub = mock.Mock()
+        stub.messages.parse.side_effect = fake_parse
+        with mock.patch.object(az, "client", stub), \
+                mock.patch.object(az.time, "sleep", self.slept.append):
+            return az._analyze_chunk(["vendor.example"], {"vendor.example": []}, deadline)
+
+    def _ok_response(self):
+        response = mock.Mock()
+        response.stop_reason = "end_turn"
+        response.parsed_output.subscriptions = []
+        return response
+
+    def _rate_limited(self):
+        return anthropic.RateLimitError(
+            "rate limited",
+            response=httpx.Response(429, request=httpx.Request("POST", "https://x")),
+            body=None,
+        )
+
+    def test_a_rate_limit_is_retried_and_then_succeeds(self):
+        result = self._patched([self._rate_limited(), self._ok_response()])
+
+        self.assertEqual(result, [])
+        self.assertEqual(self.calls, 2)
+        self.assertEqual(len(self.slept), 1)
+
+    def test_retries_are_bounded_rather_than_endless(self):
+        import app.gmail.analyzer as az
+
+        with self.assertRaises(anthropic.RateLimitError):
+            self._patched([self._rate_limited()])
+
+        self.assertEqual(self.calls, az.ANALYSIS_MAX_RETRIES + 1)
+
+    def test_a_retry_that_cannot_finish_in_the_budget_is_not_started(self):
+        # Deadline already past: failing now leaves the remaining batches their
+        # share of the budget instead of spending it on a doomed call.
+        with self.assertRaises(anthropic.RateLimitError):
+            self._patched([self._rate_limited()], deadline=time.monotonic())
+
+        self.assertEqual(self.calls, 1)
+        self.assertEqual(self.slept, [])
+
+    def test_a_timeout_is_not_retried(self):
+        # Retrying a timeout costs another full call timeout and would push the
+        # scan past the deadline that timeout exists to protect.
+        timeout = anthropic.APITimeoutError(request=httpx.Request("POST", "https://x"))
+
+        with self.assertRaises(anthropic.APITimeoutError):
+            self._patched([timeout])
+
+        self.assertEqual(self.calls, 1)
+
+    def test_a_permanent_client_error_is_not_retried(self):
+        bad_request = anthropic.BadRequestError(
+            "bad request",
+            response=httpx.Response(400, request=httpx.Request("POST", "https://x")),
+            body=None,
+        )
+
+        with self.assertRaises(anthropic.BadRequestError):
+            self._patched([bad_request])
+
+        self.assertEqual(self.calls, 1)
+
+    def test_provider_retry_after_is_honoured_over_the_default_backoff(self):
+        capped = anthropic.RateLimitError(
+            "rate limited",
+            response=httpx.Response(
+                429,
+                headers={"retry-after": "3"},
+                request=httpx.Request("POST", "https://x"),
+            ),
+            body=None,
+        )
+
+        self._patched([capped, self._ok_response()])
+
+        self.assertEqual(self.slept, [3.0])

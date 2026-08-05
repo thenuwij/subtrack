@@ -46,6 +46,27 @@ export async function handleExpiredSession() {
   }
 }
 
+let refreshInFlight: Promise<string | null> | null = null
+
+/**
+ * Trade the current refresh token for a fresh access token, or null if the
+ * session is genuinely over.
+ *
+ * Deduplicated because the dashboard fires seven requests at once: when the
+ * access token has expired they all fail together, and Supabase refresh tokens
+ * are single-use. Racing refreshes would leave the losers holding a spent
+ * token and signing the user out even though the refresh had just succeeded.
+ */
+function refreshAccessToken(): Promise<string | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = createClient().auth.refreshSession()
+      .then(({ data, error }) => (error ? null : data.session?.access_token ?? null))
+      .catch(() => null)
+      .finally(() => { refreshInFlight = null })
+  }
+  return refreshInFlight
+}
+
 async function getHeaders(token: string) {
   return {
     'Content-Type': 'application/json',
@@ -81,6 +102,7 @@ async function request(
   token: string,
   init: RequestInit = {},
   timeoutMs: number = REQUEST_TIMEOUT_MS,
+  allowRefresh: boolean = true,
 ) {
   let res: Response
   let timedOut = false
@@ -116,6 +138,17 @@ async function request(
 
   if (!res.ok) {
     if (res.status === 401) {
+      // A 401 is not proof the session is over. An access token lasts an hour
+      // and can expire between being read and being received, and the backend
+      // rejects a token it cannot verify for transient reasons too. Signing the
+      // user out on the first one turned every recoverable blip into a logout,
+      // so refresh and replay once before giving up.
+      if (allowRefresh) {
+        const refreshed = await refreshAccessToken()
+        if (refreshed && refreshed !== token) {
+          return request(path, refreshed, init, timeoutMs, false)
+        }
+      }
       await handleExpiredSession()
       throw new SessionExpiredError()
     }

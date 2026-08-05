@@ -32,6 +32,21 @@ export async function proxy(request: NextRequest) {
     }
   )
 
+  /** Redirect without dropping refreshed auth cookies.
+   *
+   * `getUser()` below may rotate the refresh token. Supabase spends the old
+   * one when it does, so returning a bare `NextResponse.redirect` — which
+   * carries none of the cookies written above — leaves the browser holding a
+   * token the server has already consumed. The next refresh then fails and the
+   * user is signed out mid-session for no visible reason. */
+  function redirectKeepingSession(path: string) {
+    const response = NextResponse.redirect(new URL(path, request.url))
+    for (const cookie of supabaseResponse.cookies.getAll()) {
+      response.cookies.set(cookie)
+    }
+    return response
+  }
+
   const {
     data: { user },
   } = await supabase.auth.getUser()
@@ -42,11 +57,11 @@ export async function proxy(request: NextRequest) {
   )
 
   if (!user && isProtectedPage) {
-    return NextResponse.redirect(new URL('/login', request.url))
+    return redirectKeepingSession('/login')
   }
 
   if (user && isAuthPage) {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
+    return redirectKeepingSession('/dashboard')
   }
 
   return supabaseResponse
