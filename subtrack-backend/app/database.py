@@ -2,9 +2,20 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.config import settings
 
+engine_options = {"pool_pre_ping": True}
+if not settings.database_url.startswith("sqlite"):
+    # Keep each Render instance inside a predictable connection budget. Two
+    # bounded Gmail scans still leave eight slots for interactive requests.
+    engine_options.update({
+        "pool_size": settings.database_pool_size,
+        "max_overflow": settings.database_max_overflow,
+        "pool_timeout": settings.database_pool_timeout,
+        "pool_recycle": 300,
+    })
+
 engine = create_engine(
     settings.database_url,
-    pool_pre_ping=True
+    **engine_options,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

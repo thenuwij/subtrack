@@ -6,7 +6,11 @@ import type {
   AgentThread,
 } from '@/lib/agent/types'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+if (process.env.NODE_ENV === 'production' && !process.env.NEXT_PUBLIC_API_URL) {
+  throw new Error('NEXT_PUBLIC_API_URL must be configured for production builds.')
+}
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
+const JSON_TIMEOUT_MS = 15_000
 
 function headers(token: string) {
   return {
@@ -27,10 +31,23 @@ async function jsonRequest<T>(
   token: string,
   init: RequestInit = {}
 ): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: { ...headers(token), ...(init.headers ?? {}) },
-  })
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), JSON_TIMEOUT_MS)
+  let response: Response
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: { ...headers(token), ...(init.headers ?? {}) },
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('The Subtrack server took too long to respond.')
+    }
+    throw new Error('Could not reach the Subtrack server.')
+  } finally {
+    window.clearTimeout(timeout)
+  }
   if (!response.ok) throw new Error(await detailFrom(response))
   if (response.status === 204) return undefined as T
   return response.json()

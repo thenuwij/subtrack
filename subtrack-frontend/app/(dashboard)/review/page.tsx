@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { formatCategory } from '@/lib/utils/categories'
 import { toast } from 'sonner'
 import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
+import { GmailScanProgress } from '@/components/gmail/GmailScanProgress'
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
@@ -47,6 +48,7 @@ export default function ReviewPage() {
   const [shares, setShares] = useState<Record<string, number>>({})
   const [custom, setCustom] = useState<Record<string, string>>({})
   const [trialPrices, setTrialPrices] = useState<Record<string, string>>({})
+  const [loadError, setLoadError] = useState('')
 
   useRegisterAgentPageContext({
     visible_detection_ids: items.slice(0, 25).map(item => item.id),
@@ -56,10 +58,16 @@ export default function ReviewPage() {
   const load = useCallback(async () => {
     const t = await token()
     if (!t) return
-    const [detected, status] = await Promise.all([getDetected(t, tab), getGmailStatus(t)])
-    setItems(detected)
-    setGmail(status)
-    return status as GmailStatus
+    try {
+      const [detected, status] = await Promise.all([getDetected(t, tab), getGmailStatus(t)])
+      setItems(detected)
+      setGmail(status)
+      setLoadError('')
+      return status as GmailStatus
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Could not load inbox findings.')
+      return undefined
+    }
   }, [tab])
 
   useEffect(() => {
@@ -101,10 +109,11 @@ export default function ReviewPage() {
     return Number.isFinite(mine) && mine > 0 && mine < billed ? mine : null
   }
 
-  // While a scan runs there's nothing to show until it finishes, so poll for it.
+  // Poll both status and findings: successful model batches are committed as
+  // they finish, so useful results can appear before the bounded scan ends.
   useEffect(() => {
     if (gmail?.scan_status !== 'running') return
-    const timer = setInterval(() => { void load() }, 4000)
+    const timer = setInterval(() => { void load() }, 3000)
     return () => clearInterval(timer)
   }, [gmail?.scan_status, load])
 
@@ -115,6 +124,9 @@ export default function ReviewPage() {
     try {
       await restoreDetected(t, id)
       setItems(prev => prev.filter(i => i.id !== id))
+      toast.success('Detection restored')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not restore this detection.')
     } finally {
       setBusy(null)
     }
@@ -152,6 +164,9 @@ export default function ReviewPage() {
       })
       setItems(prev => prev.filter(i => i.id !== id))
       setChoosing(null)
+      toast.success('Review item approved')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not add this payment.')
     } finally {
       setBusy(null)
     }
@@ -169,6 +184,9 @@ export default function ReviewPage() {
       await dismissDetected(t, id)
       // Drop it locally rather than refetching — the row is gone either way.
       setItems(prev => prev.filter(i => i.id !== id))
+      toast.success('Detection dismissed')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not dismiss this detection.')
     } finally {
       setBusy(null)
     }
@@ -179,7 +197,16 @@ export default function ReviewPage() {
     if (!t) return
     try {
       await startGmailScan(t)
-      setGmail(g => (g ? { ...g, scan_status: 'running', scan_error: null } : g))
+      setGmail(g => (g ? {
+        ...g,
+        scan_status: 'running',
+        scan_error: null,
+        scan_stage: 'queued',
+        scan_processed: 0,
+        scan_total: 0,
+        scan_partial: false,
+        scan_message: null,
+      } : g))
     } catch (e) {
       // Leave the button usable and say why — a silently ignored click reads
       // as the app being broken.
@@ -205,6 +232,13 @@ export default function ReviewPage() {
   return (
     <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
       <div className="space-y-6">
+        {loadError && (
+          <div className="flex flex-col gap-3 rounded-xl border border-destructive/20 bg-destructive/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted-foreground">{loadError}</p>
+            <Button variant="outline" size="sm" onClick={() => void load()}>Try again</Button>
+          </div>
+        )}
+
         <section className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="space-y-2">
             <p className="text-sm font-medium text-primary">From your inbox</p>
@@ -248,7 +282,7 @@ export default function ReviewPage() {
           </div>
         )}
 
-        {!gmail?.connected ? (
+        {gmail && !gmail.connected ? (
           <div className="rounded-2xl bg-card p-6 shadow-sm">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -269,21 +303,15 @@ export default function ReviewPage() {
               </div>
             </div>
           </div>
-        ) : gmail.scan_error ? (
+        ) : gmail?.scan_error ? (
           <div className="rounded-2xl border border-destructive/20 bg-destructive/5 p-6">
             <p className="text-sm font-medium text-destructive">Last scan failed</p>
             <p className="mt-1 text-sm text-muted-foreground">{gmail.scan_error}</p>
           </div>
         ) : null}
 
-        {scanning && (
-          <div className="rounded-2xl bg-card p-6 shadow-sm">
-            <p className="text-sm font-medium text-foreground">Reading your inbox…</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              The first scan of a busy inbox can take several minutes. Results
-              appear below as they&apos;re found — you can leave and come back.
-            </p>
-          </div>
+        {gmail && (scanning || gmail.scan_partial) && (
+          <GmailScanProgress gmail={gmail} />
         )}
 
         {items.length === 0 && !scanning && gmail?.connected ? (

@@ -2,26 +2,24 @@
 #
 # The frontend is on Vercel; this is the FastAPI backend it talks to.
 #
-# A note on the plan: a Gmail scan runs as a background task for a few minutes
-# after the HTTP response has already been returned. Render's free instances
-# spin down when idle and can be stopped mid-task, which leaves a scan
-# half-finished. Free is fine for trying it out — results are committed as
-# they're found, and an interrupted run is marked failed at the next boot or
-# once its heartbeat goes stale — but use `starter` for anything you want to
-# rely on.
+# Gmail scans run in a dedicated, bounded executor and finish within the
+# service's shutdown grace period. A paid always-on instance is required:
+# Render's free services can spin down while background work is still active.
 services:
   - type: web
     name: subtrack-api
     runtime: python
-    plan: free
+    plan: starter
     rootDir: subtrack-backend
     buildCommand: pip install -r requirements.txt
-    # Migrations are idempotent and run before every boot, so a newly deployed
-    # API never serves code against an older schema.
-    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    # `/` returns the health payload, so Render can tell a live deploy from a
-    # crashed one. Without this a boot failure looks like a slow start.
-    healthCheckPath: /
+    # Run schema work once per deploy, not once per horizontally scaled web
+    # instance. This avoids startup DDL races under load.
+    preDeployCommand: python scripts/migrate.py
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    maxShutdownDelaySeconds: 120
+    # Readiness includes a real database round-trip so a deploy cannot look
+    # healthy while every signed-in page is failing.
+    healthCheckPath: /health/ready
     envVars:
       # Values are deliberately not in this file — sync:false means Render
       # prompts for each one and stores it, rather than keeping secrets in git.

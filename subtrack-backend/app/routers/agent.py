@@ -27,7 +27,13 @@ from app.models import AgentAction, AgentMessage, AgentThread
 
 
 router = APIRouter(prefix="/agent", tags=["agent"])
-client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+# The SDK default is ten minutes per request, which can strand a streaming
+# response and its database connection far too long during a provider issue.
+client = anthropic.Anthropic(
+    api_key=settings.anthropic_api_key,
+    timeout=75.0,
+    max_retries=1,
+)
 logger = logging.getLogger(__name__)
 
 MAX_AGENT_STEPS = 8

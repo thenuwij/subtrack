@@ -43,9 +43,10 @@ def main():
         else:
             print(f"  fetched {done}/{total}", flush=True)
 
-    candidates = scan(
+    scan_result = scan(
         decrypt_token(account.refresh_token_encrypted), args.months, args.max, progress
     )
+    candidates = scan_result.candidates
     print()
 
     if not candidates:

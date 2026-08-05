@@ -1,8 +1,12 @@
 import logging
 import os
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import BoundedSemaphore
 from urllib.parse import quote
+from uuid import uuid4
 
 # Google returns scopes in a different order/spelling than requested (and drops
 # any the user declines). Without this, oauthlib aborts the exchange with a raw
@@ -11,7 +15,7 @@ from urllib.parse import quote
 os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 import jwt
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from google.auth.exceptions import RefreshError
 from google_auth_oauthlib.flow import Flow
@@ -115,6 +119,8 @@ def gmail_status(
         logger.warning("Marking stale scan as failed for %s", user_id)
         account.scan_status = "error"
         account.scan_error = INTERRUPTED_MESSAGE
+        account.scan_stage = None
+        account.scan_message = None
         db.commit()
 
     return {
@@ -124,6 +130,11 @@ def gmail_status(
         "last_scanned_at": account.last_scanned_at.isoformat() if account.last_scanned_at else None,
         "scan_status": account.scan_status or "idle",
         "scan_error": account.scan_error,
+        "scan_stage": account.scan_stage,
+        "scan_processed": account.scan_processed or 0,
+        "scan_total": account.scan_total or 0,
+        "scan_partial": bool(account.scan_partial),
+        "scan_message": account.scan_message,
     }
 
 
@@ -211,16 +222,33 @@ AMOUNT_TOLERANCE = 0.05  # ignore sub-5-cent differences (rounding, FX wobble)
 # shallow rescans, which is what this used to do) once scans feel fast.
 SCAN_MONTHS = 3
 
-# A live scan heartbeats scan_started_at as it progresses (every fetch batch,
-# every analysis batch), so "no heartbeat for this long" means the run is dead
-# — killed mid-scan by a redeploy, spin-down, or crash. The worst legitimate
-# gap is one analysis call at its 240s timeout plus one retry, well under this.
-STALE_SCAN_MINUTES = 10
+# Scans stop accepting work at 105 seconds. The remaining 15 seconds before the
+# two-minute UX promise cover the last database commit and the frontend's next
+# poll. A heartbeat older than three minutes therefore cannot be legitimate.
+SCAN_TIME_LIMIT_SECONDS = 105
+SCAN_FETCH_BUDGET_SECONDS = 35
+STALE_SCAN_MINUTES = 3
+MAX_SCAN_MESSAGES = 300
+
+# Gmail and model calls are network-bound but each scan still owns a database
+# session and several HTTP connections. A dedicated bounded pool prevents a
+# burst of scans from exhausting FastAPI's request workers. Horizontal Render
+# instances each add two more scan slots.
+MAX_CONCURRENT_SCANS = 2
+_scan_executor = ThreadPoolExecutor(
+    max_workers=MAX_CONCURRENT_SCANS,
+    thread_name_prefix="gmail-scan",
+)
+_scan_slots = BoundedSemaphore(MAX_CONCURRENT_SCANS)
 
 INTERRUPTED_MESSAGE = (
     "The scan was interrupted before it finished. "
     "Anything already found is saved — run it again to finish."
 )
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _norm(text: str) -> str:
@@ -311,10 +339,10 @@ def _scan_is_stale(account: GmailAccount) -> bool:
     Without this a single crashed scan locks the user out permanently: the
     endpoint sees "running" and declines to start another, forever.
     """
-    started = account.scan_started_at
-    if started is None:
+    heartbeat = account.scan_heartbeat_at or account.scan_started_at
+    if heartbeat is None:
         return True      # pre-dates the timestamp, or never recorded — don't stay stuck
-    return datetime.utcnow() - started > timedelta(minutes=STALE_SCAN_MINUTES)
+    return _utcnow() - heartbeat > timedelta(minutes=STALE_SCAN_MINUTES)
 
 
 def _apply_detections(db, user_id, subscriptions, existing_detections, detected):
@@ -387,131 +415,223 @@ def _apply_detections(db, user_id, subscriptions, existing_detections, detected)
         row.resolved_at = None
 
 
-def _run_scan(user_id: str):
-    """The scan itself. Runs as a background task with its own DB session —
-    the request that started it has long since returned.
+class ScanSuperseded(Exception):
+    """The mailbox was disconnected or a newer run took ownership."""
 
-    Results are committed batch by batch, not at the end. On a host that can
-    kill the process mid-scan (a redeploy, a free instance spinning down),
-    everything committed so far survives; each commit also refreshes the
-    heartbeat that tells /status the run is still alive.
+
+def _run_scan(user_id: str, run_id: str):
+    """Run one bounded scan in the dedicated executor.
+
+    Partial findings are committed after every model batch. A crash therefore
+    loses at most one batch, while ``scan_run_id`` prevents an older worker from
+    overwriting the status of a newer retry.
     """
-    from datetime import datetime
-
-    from app.gmail.analyzer import AnalysisFailed, analyze
+    from app.gmail.analyzer import AnalysisFailed, analyze_bounded, find_similar
     from app.gmail.scanner import scan
 
+    started = time.monotonic()
+    deadline = started + SCAN_TIME_LIMIT_SECONDS
     db = SessionLocal()
+    account = None
+
+    def ensure_current() -> None:
+        if account is None:
+            raise ScanSuperseded()
+        try:
+            db.refresh(account)
+        except Exception as exc:
+            db.rollback()
+            raise ScanSuperseded() from exc
+        if account.scan_run_id != run_id or account.scan_status != "running":
+            raise ScanSuperseded()
+
+    def heartbeat(stage: str, processed: int = 0, total: int = 0) -> None:
+        ensure_current()
+        account.scan_heartbeat_at = _utcnow()
+        account.scan_stage = stage
+        account.scan_processed = max(0, processed)
+        account.scan_total = max(0, total)
+        db.commit()
+
+    def fail(message: str) -> None:
+        db.rollback()
+        try:
+            ensure_current()
+        except ScanSuperseded:
+            return
+        account.scan_status = "error"
+        account.scan_error = message
+        account.scan_stage = None
+        account.scan_heartbeat_at = _utcnow()
+        db.commit()
+
     try:
-        account = db.query(GmailAccount).filter(GmailAccount.user_id == user_id).first()
+        account = db.query(GmailAccount).filter(
+            GmailAccount.user_id == user_id,
+            GmailAccount.scan_run_id == run_id,
+        ).first()
         if not account:
             return
 
-        def heartbeat(*_args):
-            account.scan_started_at = datetime.utcnow()
-            db.commit()
-
-        def fail(message: str) -> None:
-            account.scan_status = "error"
-            account.scan_error = message
-            db.commit()
-
         try:
-            candidates = scan(decrypt_token(account.refresh_token_encrypted),
-                              months=SCAN_MONTHS, max_messages=400,
-                              on_progress=heartbeat)
+            fetch_deadline = min(deadline, started + SCAN_FETCH_BUDGET_SECONDS)
+            scan_result = scan(
+                decrypt_token(account.refresh_token_encrypted),
+                months=SCAN_MONTHS,
+                max_messages=MAX_SCAN_MESSAGES,
+                on_progress=lambda done, total: heartbeat("reading", done, total),
+                deadline=fetch_deadline,
+            )
         except TokenUndecryptable:
-            # Nothing the user did, and nothing they can fix except reconnect.
-            # Say that, rather than showing them a cryptography error.
             logger.error("Undecryptable Gmail token for %s — key mismatch", user_id)
-            fail("Gmail needs reconnecting. Disconnect and connect "
-                 "again on the Account page.")
+            fail("Gmail needs reconnecting. Disconnect and connect again on the Account page.")
             return
         except RefreshError:
-            # The refresh token was revoked or expired — Google said no, and
-            # will keep saying no until the user grants access again.
             logger.warning("Gmail refresh token rejected for %s", user_id)
-            fail("Google no longer accepts Subtrack's access to this inbox. "
-                 "Disconnect and connect again on the Account page.")
-            return
-        except Exception:
-            # Internal detail belongs in the log, not on the user's screen.
-            logger.exception("Scan failed for %s", user_id)
-            fail("Could not finish reading your inbox. Try again, "
-                 "or reconnect Gmail if it keeps failing.")
+            fail("Google no longer accepts Subtrack's access to this inbox. Disconnect and connect again on the Account page.")
             return
 
         subscriptions = db.query(Subscription).filter(
             Subscription.user_id == user_id
         ).all()
-
         existing_detections = db.query(DetectedSubscription).filter(
             DetectedSubscription.user_id == user_id
         ).all()
 
         def apply_batch(found):
-            # Committing per batch is what makes results appear while the scan
-            # runs — and doubles as the liveness signal during analysis.
+            ensure_current()
             _apply_detections(db, user_id, subscriptions, existing_detections, found)
-            heartbeat()
+            account.scan_heartbeat_at = _utcnow()
+            db.commit()
 
+        # Reserve time for duplicate hints and the final durable status write.
+        analysis_deadline = max(time.monotonic() + 1, deadline - 18)
         try:
-            detected = analyze(candidates, on_batch=apply_batch)
+            outcome = analyze_bounded(
+                scan_result.candidates,
+                on_batch=apply_batch,
+                on_progress=lambda done, total: heartbeat("analysing", done, total),
+                deadline=analysis_deadline,
+            )
         except AnalysisFailed:
-            # Distinct from "found nothing": none of the inbox was analyzed,
-            # and reporting an empty success would be a lie.
             logger.exception("Analysis failed entirely for %s", user_id)
-            fail("Your inbox was read but couldn't be analysed this time. "
-                 "Try again in a few minutes.")
-            return
-        except Exception:
-            logger.exception("Scan failed for %s", user_id)
-            fail("Could not finish reading your inbox. Try again, "
-                 "or reconnect Gmail if it keeps failing.")
+            fail("Your inbox was read but couldn't be analysed this time. Try again in a few minutes.")
             return
 
-        # Flag detections that duplicate something already tracked under a
-        # different name. Done after the rows exist so every pending suggestion
-        # is checked, not just the ones from this scan.
+        heartbeat("finalising", outcome.processed_domains, outcome.selected_domains)
         db.flush()
-        pending = [r for r in existing_detections if r.status == DetectionStatus.pending]
-        active = [s for s in subscriptions if s.is_active]
-        if pending and active:
-            for i, (j, reason) in find_similar(pending, active).items():
-                # An exact price-change match is stronger evidence than a
-                # name-similarity guess, so don't overwrite it.
+        pending = [
+            row for row in existing_detections
+            if row.status == DetectionStatus.pending
+        ]
+        active = [subscription for subscription in subscriptions if subscription.is_active]
+        if pending and active and time.monotonic() < deadline - 2:
+            for i, (j, reason) in find_similar(
+                pending[:50],
+                active[:100],
+                deadline=deadline - 2,
+            ).items():
                 if pending[i].existing_subscription_id is None:
                     pending[i].similar_subscription_id = active[j].id
                     pending[i].similar_reason = reason[:300]
 
+        ensure_current()
+        partial = bool(scan_result.truncated or outcome.truncated)
         account.scan_status = "done"
         account.scan_error = None
-        account.last_scanned_at = datetime.utcnow()
+        account.scan_stage = "complete"
+        account.scan_partial = partial
+        account.scan_message = (
+            "Finished within two minutes using the strongest recurring-payment signals. Some lower-priority receipt emails were skipped."
+            if partial
+            else "Inbox scan complete. Review anything new below."
+        )
+        account.scan_processed = outcome.processed_domains
+        account.scan_total = outcome.selected_domains
+        account.scan_heartbeat_at = _utcnow()
+        account.last_scanned_at = _utcnow()
         db.commit()
-        logger.info("Scan complete for %s: %d candidates", user_id, len(detected))
+        logger.info(
+            "Scan complete for %s in %.1fs: %d findings, partial=%s",
+            user_id,
+            time.monotonic() - started,
+            len(outcome.subscriptions),
+            partial,
+        )
+    except ScanSuperseded:
+        logger.info("Scan %s for %s was superseded", run_id, user_id)
+        db.rollback()
+    except Exception:
+        logger.exception("Scan failed for %s", user_id)
+        fail("Could not finish reading your inbox. Try again, or reconnect Gmail if it keeps failing.")
     finally:
         db.close()
 
 
+def _run_and_release(user_id: str, run_id: str) -> None:
+    try:
+        _run_scan(user_id, run_id)
+    finally:
+        _scan_slots.release()
+
+
+def shutdown_scan_executor() -> None:
+    """Let bounded active work finish during Render's shutdown grace period."""
+    _scan_executor.shutdown(wait=True, cancel_futures=True)
+
+
 @router.post("/scan")
 def start_scan(
-    background: BackgroundTasks,
     user_id: str = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
-    account = db.query(GmailAccount).filter(GmailAccount.user_id == user_id).first()
+    account = (
+        db.query(GmailAccount)
+        .filter(GmailAccount.user_id == user_id)
+        .with_for_update()
+        .first()
+    )
     if not account:
         raise HTTPException(status_code=404, detail="No Gmail account connected")
     if account.scan_status == "running" and not _scan_is_stale(account):
-        return {"status": "running"}
+        return {"status": "running", "deadline_seconds": SCAN_TIME_LIMIT_SECONDS}
+    if not _scan_slots.acquire(blocking=False):
+        raise HTTPException(
+            status_code=503,
+            detail="The inbox scanner is busy right now. Try again in a minute.",
+        )
 
+    run_id = str(uuid4())
+    now = _utcnow()
     account.scan_status = "running"
     account.scan_error = None
-    account.scan_started_at = datetime.utcnow()
-    db.commit()
+    account.scan_started_at = now
+    account.scan_heartbeat_at = now
+    account.scan_run_id = run_id
+    account.scan_stage = "queued"
+    account.scan_processed = 0
+    account.scan_total = 0
+    account.scan_partial = False
+    account.scan_message = None
+    try:
+        db.commit()
+        _scan_executor.submit(_run_and_release, user_id, run_id)
+    except Exception:
+        _scan_slots.release()
+        db.rollback()
+        failed_account = db.query(GmailAccount).filter(
+            GmailAccount.user_id == user_id,
+            GmailAccount.scan_run_id == run_id,
+        ).first()
+        if failed_account:
+            failed_account.scan_status = "error"
+            failed_account.scan_error = "Could not start the inbox scan. Try again shortly."
+            failed_account.scan_stage = None
+            db.commit()
+        logger.exception("Could not queue Gmail scan for %s", user_id)
+        raise HTTPException(status_code=503, detail="Could not start the inbox scan. Try again shortly.")
 
-    background.add_task(_run_scan, user_id)
-    return {"status": "running"}
+    return {"status": "running", "deadline_seconds": SCAN_TIME_LIMIT_SECONDS}
 
 
 @router.delete("/disconnect")

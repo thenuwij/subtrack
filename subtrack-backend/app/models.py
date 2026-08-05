@@ -100,6 +100,9 @@ class SubscriptionChange(Base):
 class GmailAccount(Base):
     """A connected Gmail mailbox. Stores only the refresh token, encrypted."""
     __tablename__ = "gmail_accounts"
+    __table_args__ = (
+        Index("ix_gmail_accounts_scan_heartbeat", "scan_status", "scan_heartbeat_at"),
+    )
     user_id = Column(String, primary_key=True)        # Supabase user ID
     email_address = Column(String, nullable=False)
     refresh_token_encrypted = Column(Text, nullable=False)
@@ -107,12 +110,17 @@ class GmailAccount(Base):
     last_scanned_at = Column(DateTime, nullable=True)
     scan_status = Column(String, default="idle")      # idle | running | done | error
     scan_error = Column(String, nullable=True)
-    # Heartbeat of the current scan: set when it starts and refreshed as it
-    # progresses (each fetch batch, each analysis batch). A process that dies
-    # mid-scan leaves scan_status stuck on "running", which would block every
-    # future scan forever; a heartbeat older than the staleness window is what
-    # lets a dead run be recognised, surfaced as an error, and superseded.
+    # ``scan_started_at`` is the real start time and never moves. Keeping the
+    # heartbeat separately makes both the two-minute budget and dead-worker
+    # detection reliable.
     scan_started_at = Column(DateTime, nullable=True)
+    scan_heartbeat_at = Column(DateTime, nullable=True)
+    scan_run_id = Column(String(36), nullable=True)
+    scan_stage = Column(String(24), nullable=True)    # queued | reading | analysing | finalising
+    scan_processed = Column(Integer, nullable=False, default=0)
+    scan_total = Column(Integer, nullable=False, default=0)
+    scan_partial = Column(Boolean, nullable=False, default=False)
+    scan_message = Column(String(300), nullable=True)
 
 
 class DetectionStatus(str, enum.Enum):

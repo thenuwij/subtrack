@@ -15,7 +15,14 @@ like Stripe can be split into their real merchants because all their subjects
 are visible side by side.
 """
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
+import time
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    TimeoutError as FuturesTimeout,
+    as_completed,
+)
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Literal
 
@@ -27,16 +34,16 @@ from app.gmail.scanner import ReceiptCandidate
 
 logger = logging.getLogger(__name__)
 
-# The SDK's default timeout is 10 minutes per call. A call that slow would
-# outlive the scan's staleness window and make a live scan look dead, so cap
-# it: fail the batch and move on rather than hang the whole scan.
+# Classification is latency-sensitive and independently retryable on the next
+# inbox scan. One slow provider call must not hold the user beyond the overall
+# scan budget, so retries are disabled and every call has a short hard timeout.
 client = anthropic.Anthropic(
     api_key=settings.anthropic_api_key,
-    timeout=240.0,
-    max_retries=1,
+    timeout=42.0,
+    max_retries=0,
 )
 
-MODEL = "claude-opus-5"
+MODEL = "claude-sonnet-5"
 
 # How many sender-domain groups to analyze per API call.
 GROUPS_PER_CALL = 8
@@ -46,12 +53,25 @@ GROUPS_PER_CALL = 8
 # groups per call a first scan is easily 5-10 calls of 30-90s each, which
 # sequentially is most of "why is this taking so long".
 MAX_CONCURRENT_CALLS = 3
+MAX_DOMAINS_PER_SCAN = GROUPS_PER_CALL * MAX_CONCURRENT_CALLS
+MAX_EMAILS_PER_DOMAIN = 20
 
 
 class AnalysisFailed(Exception):
     """Every analysis batch failed. Distinct from finding nothing: reporting
     an empty result here would tell the user their inbox has no subscriptions
     when in truth none of it was analyzed."""
+
+
+@dataclass
+class AnalysisOutcome:
+    subscriptions: list["DetectedSubscription"]
+    processed_domains: int
+    selected_domains: int
+    total_domains: int
+    failed_batches: int
+    truncated: bool
+    timed_out: bool
 
 
 class DetectedSubscription(BaseModel):
@@ -180,8 +200,9 @@ def _group_by_domain(candidates: list[ReceiptCandidate]) -> dict[str, list[Recei
 
 
 def _render_group(domain: str, emails: list[ReceiptCandidate]) -> str:
+    selected = emails[-MAX_EMAILS_PER_DOMAIN:]
     lines = [f"### {domain} — {len(emails)} email(s)"]
-    for c in emails:
+    for c in selected:
         amount = f"{c.currency} {c.amount:.2f}" if c.amount is not None else "no amount parsed"
         lines.append(f"  {c.date}  [{amount}]  {c.subject}")
         # The subject alone can't distinguish Apple Music from iCloud; the
@@ -204,8 +225,9 @@ def _analyze_chunk(
 
     response = client.messages.parse(
         model=MODEL,
-        max_tokens=16000,
-        output_config={"effort": "medium"},
+        max_tokens=6000,
+        thinking={"type": "disabled"},
+        output_config={"effort": "low"},
         output_format=AnalysisResult,
         system=SYSTEM,
         messages=[{"role": "user", "content": prompt}],
@@ -234,10 +256,21 @@ def _analyze_chunk(
     return results
 
 
-def analyze(
+def _domain_priority(item: tuple[str, list[ReceiptCandidate]]) -> tuple[int, int, int]:
+    """Put the strongest recurring/trial signals inside the bounded model pass."""
+    _, emails = item
+    signal = re.compile(r"(?i)(subscription|renew|recurring|trial|invoice|bill)")
+    signalled = sum(bool(signal.search(f"{email.subject} {email.excerpt}")) for email in emails)
+    distinct_dates = len({email.date for email in emails})
+    return signalled, distinct_dates, len(emails)
+
+
+def analyze_bounded(
     candidates: list[ReceiptCandidate],
     on_batch: Callable[[list[DetectedSubscription]], None] | None = None,
-) -> list[DetectedSubscription]:
+    on_progress: Callable[[int, int], None] | None = None,
+    deadline: float | None = None,
+) -> AnalysisOutcome:
     """Analyze all candidates, including those without a parsed amount —
     cancellation notices and failed payments carry no amount but real signal.
 
@@ -248,18 +281,35 @@ def analyze(
     Raises AnalysisFailed when every batch errored.
     """
     groups = _group_by_domain(candidates)
-    domains = sorted(groups, key=lambda d: -len(groups[d]))
+    domains = [
+        domain for domain, _ in sorted(
+            groups.items(),
+            key=_domain_priority,
+            reverse=True,
+        )[:MAX_DOMAINS_PER_SCAN]
+    ]
     chunks = [domains[i:i + GROUPS_PER_CALL] for i in range(0, len(domains), GROUPS_PER_CALL)]
     if not chunks:
-        return []
+        return AnalysisOutcome([], 0, 0, len(groups), 0, False, False)
 
     results: list[DetectedSubscription] = []
     failed = 0
+    succeeded = 0
+    processed_domains = 0
+    timed_out = False
+    if on_progress is not None:
+        on_progress(0, len(domains))
 
-    with ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_CALLS, len(chunks))) as pool:
+    pool = ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT_CALLS, len(chunks)))
+    futures = {}
+    try:
         futures = {pool.submit(_analyze_chunk, chunk, groups): chunk for chunk in chunks}
-        for future in as_completed(futures):
+        timeout = None if deadline is None else max(0.1, deadline - time.monotonic())
+        for future in as_completed(futures, timeout=timeout):
             chunk = futures[future]
+            processed_domains += len(chunk)
+            if on_progress is not None:
+                on_progress(processed_domains, len(domains))
             try:
                 found = _dedupe(future.result())
             except Exception as exc:
@@ -267,17 +317,45 @@ def analyze(
                 logger.error("Analysis batch %r… failed: %s: %s",
                              chunk[0], type(exc).__name__, exc)
                 continue
+            succeeded += 1
             results.extend(found)
             if on_batch is not None:
                 on_batch(found)
+    except FuturesTimeout:
+        timed_out = True
+        logger.warning("Gmail analysis reached its scan deadline")
+    finally:
+        for future in futures:
+            future.cancel()
+        # Timed-out HTTP calls have their own 42-second cap. Do not make the
+        # scan endpoint wait again for work whose result can no longer be used.
+        pool.shutdown(wait=not timed_out, cancel_futures=True)
 
+    if timed_out and succeeded == 0:
+        raise AnalysisFailed("analysis timed out before any batch completed")
     if failed == len(chunks):
         raise AnalysisFailed(f"all {failed} analysis batches failed")
     if failed:
         logger.warning("%d of %d analysis batches failed — results may be incomplete",
                        failed, len(chunks))
 
-    return _dedupe(results)
+    return AnalysisOutcome(
+        subscriptions=_dedupe(results),
+        processed_domains=processed_domains,
+        selected_domains=len(domains),
+        total_domains=len(groups),
+        failed_batches=failed,
+        truncated=timed_out or failed > 0 or len(domains) < len(groups),
+        timed_out=timed_out,
+    )
+
+
+def analyze(
+    candidates: list[ReceiptCandidate],
+    on_batch: Callable[[list[DetectedSubscription]], None] | None = None,
+) -> list[DetectedSubscription]:
+    """Compatibility wrapper for the command-line scanner and existing callers."""
+    return analyze_bounded(candidates, on_batch=on_batch).subscriptions
 
 
 def _dedupe(subs: list[DetectedSubscription]) -> list[DetectedSubscription]:
@@ -358,6 +436,7 @@ extra row they can merge themselves."""
 def find_similar(
     detections: list,
     subscriptions: list,
+    deadline: float | None = None,
 ) -> dict[int, tuple[int, str]]:
     """Map detection index -> (subscription index, reason) for same-service pairs.
 
@@ -380,10 +459,15 @@ def find_similar(
         for i, d in enumerate(detections)
     )
 
+    remaining = 15.0 if deadline is None else min(15.0, deadline - time.monotonic())
+    if remaining < 2:
+        return {}
+
     try:
-        response = client.messages.parse(
+        response = client.with_options(timeout=remaining, max_retries=0).messages.parse(
             model=MODEL,
-            max_tokens=8000,
+            max_tokens=2500,
+            thinking={"type": "disabled"},
             output_config={"effort": "low"},
             output_format=SimilarityResult,
             system=SIMILARITY_SYSTEM,
@@ -443,7 +527,8 @@ def find_duplicates(subscriptions: list) -> list[tuple[int, int, str]]:
     try:
         response = client.messages.parse(
             model=MODEL,
-            max_tokens=8000,
+            max_tokens=3000,
+            thinking={"type": "disabled"},
             output_config={"effort": "low"},
             output_format=DuplicateResult,
             system=SIMILARITY_SYSTEM + "\n\nHere you are checking one list against "

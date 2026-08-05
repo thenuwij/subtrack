@@ -55,6 +55,11 @@ export interface GmailStatus {
   last_scanned_at?: string | null
   scan_status?: 'idle' | 'running' | 'done' | 'error'
   scan_error?: string | null
+  scan_stage?: 'queued' | 'reading' | 'analysing' | 'finalising' | 'complete' | null
+  scan_processed?: number
+  scan_total?: number
+  scan_partial?: boolean
+  scan_message?: string | null
 }
 
 export interface DetectedSubscription {

@@ -62,6 +62,7 @@ export default function DashboardPage() {
   const [remindersRetrying, setRemindersRetrying] = useState(false)
   const [changesExpanded, setChangesExpanded] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const { baseCurrency, convertAmount } = useCurrency()
 
   const fetchData = useCallback(async () => {
@@ -71,10 +72,15 @@ export default function DashboardPage() {
       if (!session) return
 
       const token = session.access_token
-      const [subs, chgs, prefs, gmailStatus, reminderResult] = await Promise.all([
-        getSubscriptions(token),
-        getSubscriptionChanges(token, 30),
-        getPreferences(token),
+      const [subsResult, changesResult, preferencesResult, gmailStatus, reminderResult] = await Promise.all([
+        getSubscriptions(token)
+          .then(rows => ({ rows, error: '' }))
+          .catch(error => ({
+            rows: null,
+            error: error instanceof Error ? error.message : 'Could not load recurring payments.',
+          })),
+        getSubscriptionChanges(token, 30).catch(() => null),
+        getPreferences(token).catch(() => null),
         getGmailStatus(token).catch(() => null),
         getReminders(token, { horizonDays: 90 })
           .then(rows => ({ rows, error: '' }))
@@ -84,12 +90,19 @@ export default function DashboardPage() {
           })),
       ])
 
-      setSubscriptions(subs)
-      setChanges(chgs)
-      setMonthlyIncome(prefs.monthly_income ?? null)
+      if (subsResult.rows) {
+        setSubscriptions(subsResult.rows)
+        setLoadError('')
+      } else {
+        setLoadError(subsResult.error)
+      }
+      if (changesResult) setChanges(changesResult)
+      if (preferencesResult) setMonthlyIncome(preferencesResult.monthly_income ?? null)
       setGmail(gmailStatus)
       setReminders(reminderResult.rows)
       setReminderError(reminderResult.error)
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Could not load your dashboard.')
     } finally {
       setLoading(false)
     }
@@ -184,6 +197,26 @@ export default function DashboardPage() {
 
   const hasPayments = subscriptions.length > 0
 
+  if (loadError && !hasPayments) {
+    return (
+      <div className="mx-auto max-w-xl px-4 py-16 text-center sm:px-6">
+        <div className="rounded-2xl border border-destructive/20 bg-card p-8 shadow-sm">
+          <h1 className="text-xl font-semibold text-foreground">Couldn&apos;t load your dashboard</h1>
+          <p className="mt-2 text-sm text-muted-foreground">{loadError}</p>
+          <Button
+            className="mt-5"
+            onClick={() => {
+              setLoading(true)
+              void fetchData()
+            }}
+          >
+            Try again
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   // First run is the product's one chance to explain itself. A dashboard of
   // zeroes explains nothing, so the empty state sells the thing that makes
   // this worth using instead.
@@ -237,6 +270,13 @@ export default function DashboardPage() {
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="space-y-10">
+
+        {loadError && (
+          <div className="flex flex-col gap-3 rounded-xl border border-destructive/20 bg-destructive/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted-foreground">Couldn&apos;t refresh your payments. Showing the last loaded totals.</p>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>Retry</Button>
+          </div>
+        )}
 
         {/* ── Hero ────────────────────────────────────────────────────────
             No card, no border, no icon chip. One number, given the room to

@@ -8,6 +8,7 @@ import { useCurrency } from '@/lib/context/currency'
 import { formatCurrency } from '@/lib/utils/currency'
 import { categoryColor, formatCategory } from '@/lib/utils/categories'
 import { isActiveTrial } from '@/lib/utils/trials'
+import { toast } from 'sonner'
 
 const CYCLE_LABEL: Record<string, string> = {
   weekly:  '/wk',
@@ -50,6 +51,8 @@ export function SubscriptionCard({
     setDeleting(true)
     try {
       await onDelete(subscription.id)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not delete this payment.')
     } finally {
       setDeleting(false)
       setConfirming(false)
