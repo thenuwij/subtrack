@@ -50,7 +50,18 @@ export default function GmailCallbackPage() {
         // request() owns the expired-session redirect. Do not race it with an
         // account redirect after it has cleared the stale local credentials.
         if (error instanceof SessionExpiredError) return
-        router.replace('/account?gmail_error=connection_failed')
+        // The backend distinguishes an expired request, a replayed one, a
+        // refused scope and a failed exchange — each with its own instruction.
+        // Collapsing them into one generic line left the only way to tell
+        // them apart being the server log, so carry the reason through.
+        // These messages are written for users and contain no credentials;
+        // the code and state were scrubbed from the URL above.
+        const detail = error instanceof Error ? error.message.slice(0, 300) : ''
+        router.replace(
+          `/account?gmail_error=connection_failed${
+            detail ? `&gmail_detail=${encodeURIComponent(detail)}` : ''
+          }`,
+        )
       }
     }
 

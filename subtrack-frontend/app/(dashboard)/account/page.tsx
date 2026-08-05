@@ -96,9 +96,14 @@ export default function AccountPage() {
     const params = new URLSearchParams(window.location.search)
     const failure = params.get('gmail_error')
     if (failure) {
+      // The backend's own wording is more specific than anything mapped from
+      // a code here — "this request expired" versus "could not be connected"
+      // is the difference between knowing to retry and guessing.
+      const detail = params.get('gmail_detail')?.trim()
       setGmailError(
-        GMAIL_ERROR_MESSAGES[failure]
-          ?? 'Gmail could not be connected. Please start again.',
+        detail
+          || GMAIL_ERROR_MESSAGES[failure]
+          || 'Gmail could not be connected. Please start again.',
       )
       window.history.replaceState({}, '', window.location.pathname)
     } else if (params.get('gmail') === 'connected') {
