@@ -35,11 +35,11 @@ Real billing cycles are messier than "monthly". Subtrack handles fortnightly, fo
 
 It also tracks the shape of a commitment over time — paused, cancelling, ended, still in a free trial, split with someone else, or a variable bill whose amount moves.
 
-### Honest multi-currency totals
+### Multi-currency totals
 
 Amounts are stored in the currency you were actually charged in. A converted figure appears only when a genuine exchange rate is available; Subtrack never invents a 1:1 fallback to fill a gap. Every total says how good its conversion is — exact, converted at the current rate, converted at a stale rate, or not converted at all — so a number never looks more precise than it is.
 
-### A finance agent, not a chatbot
+### AI agentic assistance
 
 The assistant reads your tracked payments and the page you are on, and works across them: totals and upcoming charges, duplicates and price rises, where you are overspending, and what a cheaper alternative would cost — researched live, with citations.
 
