@@ -11,3 +11,8 @@ subtrack-frontend/.next/
 
 # General
 .DS_Store
+
+# Local editor/agent tooling
+.claude/
+CLAUDE.md
+subtrack-frontend/CLAUDE.md
