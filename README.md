@@ -2,7 +2,7 @@
 
 Subtrack is a recurring-payment tracker that finds your subscriptions by reading your Gmail receipts — no bank-feed access and no manual expense logging. It normalizes what it finds into one view across currencies and billing cadences, and layers an AI assistant on top for analysis and changes you confirm.
 
-Live frontend: [subtrack-beryl.vercel.app](https://subtrack-beryl.vercel.app)
+Deployed live: [subtrack-beryl.vercel.app](https://subtrack-beryl.vercel.app)
 
 ## What it does
 
