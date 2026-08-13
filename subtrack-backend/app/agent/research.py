@@ -26,7 +26,6 @@ from app.services.recurrence import cadence_for, cadence_label
 from app.services.schedules import utc_naive
 from app.services.trials import active_trial
 
-
 logger = logging.getLogger(__name__)
 RESEARCH_CACHE_FOR = timedelta(hours=24)
 RESEARCH_LIMIT_PER_HOUR = 5

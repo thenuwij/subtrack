@@ -14,10 +14,12 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 from app.database import Base  # noqa: E402
 from app.gmail.analyzer import (  # noqa: E402
     SYSTEM,
-    DetectedSubscription as AnalyzedSubscription,
     _dedupe,
     _normalise_due_date,
     _render_group,
+)
+from app.gmail.analyzer import (
+    DetectedSubscription as AnalyzedSubscription,
 )
 from app.gmail.scanner import ReceiptCandidate  # noqa: E402
 from app.models import (  # noqa: E402

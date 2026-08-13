@@ -24,7 +24,6 @@ from app.models import (
     UserPreference,
 )
 from app.routers.rates import get_cached_rate_snapshot
-from app.services.reminders import list_user_reminders
 from app.services.recurrence import (
     annual_equivalent,
     cadence_for,
@@ -36,8 +35,8 @@ from app.services.recurrence import (
     occurrences_between,
     utc_naive,
 )
+from app.services.reminders import list_user_reminders
 from app.services.trials import active_trial
-
 
 SCOPE_NOTE = (
     "Tracked recurring commitments only; this is not a bank-transaction ledger "

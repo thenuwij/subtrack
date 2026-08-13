@@ -5,6 +5,7 @@ plaintext means a database dump is a mailbox dump, so it never touches the
 DB unencrypted.
 """
 from cryptography.fernet import Fernet, InvalidToken
+
 from app.config import settings
 
 GENERATE_HINT = (

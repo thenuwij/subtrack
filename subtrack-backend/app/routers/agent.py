@@ -14,17 +14,16 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.agent.tools import TOOL_DEFINITIONS, run_tool
 from app.agent.actions import (
     actions_for_messages,
     confirm_action,
     reject_action,
 )
+from app.agent.tools import TOOL_DEFINITIONS, run_tool
 from app.config import settings
 from app.database import get_db
 from app.middleware.auth import verify_token
 from app.models import AgentAction, AgentMessage, AgentThread, Category
-
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 # The SDK default is ten minutes per request, which can strand a streaming
@@ -442,7 +441,7 @@ def _stream_reply(
                         )
                     content = json.dumps(result)
                     is_error = False
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - any tool failure is sanitised before the model sees it
                     db.rollback()
                     # Tool validation errors can contain private amounts or
                     # names. Log only the allow-listed tool and exception type.
@@ -463,7 +462,7 @@ def _stream_reply(
     except GeneratorExit:
         _mark_failed(db, assistant_message_id, "stream_interrupted")
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - every stream failure becomes a typed error code
         code = _error_code(exc)
         logger.error(
             "Agent response failed for thread %s (%s)",
@@ -746,7 +745,7 @@ def create_message(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="This message was already received")
+        raise HTTPException(status_code=409, detail="This message was already received") from None
     db.refresh(assistant_message)
     return _streaming_response(
         _stream_reply(db, thread.id, assistant_message.id, user_id)

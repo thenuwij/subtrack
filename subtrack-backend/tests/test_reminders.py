@@ -11,8 +11,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 
-from app.database import Base  # noqa: E402
 from app.agent.finance import reminders_overview  # noqa: E402
+from app.database import Base  # noqa: E402
 from app.models import (  # noqa: E402
     AgentResearchCache,
     BillingCycle,

@@ -616,7 +616,7 @@ def analyze_bounded(
                 on_progress(processed_domains, len(domains))
             try:
                 found = _dedupe(future.result())
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - one worker's failure must not end the scan
                 failed += 1
                 # Sender domains are recurring-finance metadata and provider
                 # exception text may echo request data. Keep operational logs
@@ -845,7 +845,7 @@ def find_similar(
                 ),
             }],
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a failed similarity check degrades to no matches
         logger.error("Similarity check failed (%s)", type(exc).__name__)
         return {}
 

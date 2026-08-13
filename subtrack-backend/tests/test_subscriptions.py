@@ -24,10 +24,10 @@ from app.models import (  # noqa: E402
 )
 from app.routers import rates as rates_router  # noqa: E402
 from app.routers.subscriptions import (  # noqa: E402
-    SubscriptionCreate,
-    SubscriptionUpdate,
     DismissDuplicateRequest,
     EquivalencePreview,
+    SubscriptionCreate,
+    SubscriptionUpdate,
     create_subscription,
     dismiss_duplicate_suggestion,
     get_duplicates,
@@ -318,9 +318,8 @@ class SubscriptionContractTests(unittest.TestCase):
         with patch(
             "app.gmail.analyzer.find_duplicates",
             side_effect=RuntimeError("Duplicate check temporarily unavailable."),
-        ):
-            with self.assertRaises(HTTPException) as caught:
-                get_duplicates(user_id="owner", db=self.db)
+        ), self.assertRaises(HTTPException) as caught:
+            get_duplicates(user_id="owner", db=self.db)
 
         self.assertEqual(caught.exception.status_code, 503)
         self.assertIn("temporarily unavailable", caught.exception.detail)

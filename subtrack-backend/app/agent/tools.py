@@ -9,21 +9,19 @@ from app.agent.actions import (
     ACTION_TOOL_DEFINITIONS,
     create_action_proposal,
 )
-
 from app.agent.finance import (
     commitment_changes,
     duplicate_payments,
     financial_overview,
     list_payments,
     payment_detail,
-    review_detections,
     reminders_overview,
+    review_detections,
     saving_candidates,
     upcoming_charges,
 )
 from app.agent.research import ALTERNATIVE_RESEARCH_TOOL, research_alternatives
 from app.models import Category
-
 
 CATEGORIES = [item.value for item in Category]
 

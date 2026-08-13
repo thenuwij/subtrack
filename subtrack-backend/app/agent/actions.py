@@ -19,10 +19,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
-    AmountType,
     AgentAction,
     AgentMessage,
     AgentResearchCache,
+    AmountType,
     BillingCycle,
     Category,
     ChangeKind,
@@ -36,12 +36,17 @@ from app.models import (
     SubscriptionChange,
     UserPreference,
 )
+from app.routers.detected import ApproveOverrides, apply_approval
+from app.routers.rates import conversion_for_storage
 from app.routers.subscriptions import (
     log_change,
     retarget_detection_links,
 )
-from app.routers.detected import ApproveOverrides, apply_approval
-from app.routers.rates import conversion_for_storage
+from app.services.duplicates import (
+    canonical_duplicate_pair,
+    delete_duplicate_dismissals_for_subscription,
+    persist_duplicate_dismissal,
+)
 from app.services.recurrence import (
     Cadence,
     cadence_for,
@@ -53,12 +58,6 @@ from app.services.recurrence import (
 from app.services.reminders import reminder_occurrence
 from app.services.schedules import utc_naive
 from app.services.trials import sync_trial_reminder
-from app.services.duplicates import (
-    canonical_duplicate_pair,
-    delete_duplicate_dismissals_for_subscription,
-    persist_duplicate_dismissal,
-)
-
 
 ACTION_EXPIRES_AFTER = timedelta(hours=24)
 ACTION_TOOL_PREFIX = "propose_"
@@ -1377,7 +1376,7 @@ def get_owned_action(
         try:
             action_id = UUID(action_id)
         except ValueError:
-            raise HTTPException(status_code=404, detail="Assistant action not found")
+            raise HTTPException(status_code=404, detail="Assistant action not found") from None
     query = db.query(AgentAction).filter(
         AgentAction.id == action_id,
         AgentAction.user_id == user_id,

@@ -3,12 +3,13 @@ import math
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
+
 from app.database import get_db
 from app.middleware.auth import verify_token
 from app.models import UserPreference
 from app.routers.rates import get_cached_rate_snapshot
-from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 

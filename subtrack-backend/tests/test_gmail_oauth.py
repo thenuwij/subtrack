@@ -21,7 +21,6 @@ from app.gmail.crypto import decrypt_token  # noqa: E402
 from app.models import GmailAccount, GmailOAuthState  # noqa: E402
 from app.routers import gmail  # noqa: E402
 
-
 TEST_FERNET_KEY = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
 
 

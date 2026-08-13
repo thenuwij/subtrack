@@ -13,7 +13,6 @@ from typing import Iterable
 
 from app.models import BillingCycle, PaymentStatus, RecurrenceUnit
 
-
 DAYS_PER_YEAR = 365
 WEEKS_PER_YEAR = 52
 MAX_INTERVAL_COUNT = 1200
@@ -226,13 +225,11 @@ def effective_status(subscription, now: datetime | None = None) -> str:
     if end and utc_naive(end).date() < now.date():
         return PaymentStatus.ended.value
     cancellation = getattr(subscription, "cancellation_effective_at", None)
-    if status == PaymentStatus.cancelling.value and cancellation:
-        if utc_naive(cancellation).date() <= now.date():
-            return PaymentStatus.cancelled.value
+    if status == PaymentStatus.cancelling.value and cancellation and utc_naive(cancellation).date() <= now.date():
+        return PaymentStatus.cancelled.value
     paused_until = getattr(subscription, "paused_until", None)
-    if status == PaymentStatus.paused.value and paused_until:
-        if utc_naive(paused_until).date() <= now.date():
-            return PaymentStatus.active.value
+    if status == PaymentStatus.paused.value and paused_until and utc_naive(paused_until).date() <= now.date():
+        return PaymentStatus.active.value
     return status
 
 

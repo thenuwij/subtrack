@@ -1,17 +1,41 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing import NamedTuple, Optional
 from datetime import datetime
+from typing import NamedTuple, Optional
 from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy.orm import Session
+
 from app.database import get_db
-from app.models import (
-    AgentResearchCache, AmountType, BillingCycle, Category, ChangeKind, DetectedSubscription,
-    PaymentReminder, PaymentStatus, RecurrenceUnit, SpendingType, Subscription,
-    SubscriptionChange, UserPreference,
-)
 from app.middleware.auth import verify_token
+from app.models import (
+    AgentResearchCache,
+    AmountType,
+    BillingCycle,
+    Category,
+    ChangeKind,
+    DetectedSubscription,
+    PaymentReminder,
+    PaymentStatus,
+    RecurrenceUnit,
+    SpendingType,
+    Subscription,
+    SubscriptionChange,
+    UserPreference,
+)
 from app.routers.rates import conversion_for_storage
+from app.services.duplicates import (
+    # Re-exported so tests can patch the cache and its bounds through this
+    # module. Imported for their side effect on the module namespace, not
+    # used directly here.
+    DUPLICATE_CACHE_SECONDS,  # noqa: F401
+    DUPLICATE_MODEL_LIMIT,  # noqa: F401
+    _duplicate_cache,  # noqa: F401
+    _duplicate_cache_lock,  # noqa: F401
+    delete_duplicate_dismissals_for_subscription,
+    duplicate_suggestions,
+    persist_duplicate_dismissal,
+)
 from app.services.recurrence import (
     Cadence,
     annual_equivalent,
@@ -25,15 +49,6 @@ from app.services.recurrence import (
     utc_naive,
 )
 from app.services.trials import sync_trial_reminder, utcnow
-from app.services.duplicates import (
-    DUPLICATE_CACHE_SECONDS,
-    DUPLICATE_MODEL_LIMIT,
-    _duplicate_cache,
-    _duplicate_cache_lock,
-    delete_duplicate_dismissals_for_subscription,
-    duplicate_suggestions,
-    persist_duplicate_dismissal,
-)
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 

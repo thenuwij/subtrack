@@ -9,12 +9,12 @@ import html
 import logging
 import re
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 import httplib2
-from google_auth_httplib2 import AuthorizedHttp
 from google.oauth2.credentials import Credentials
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 
 from app.config import settings

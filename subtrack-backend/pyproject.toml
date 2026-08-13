@@ -1,0 +1,28 @@
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+# Correctness and clarity rules. Stylistic modernisation (UP) and the
+# timezone rules (DTZ) are deliberately left out: billing dates are stored
+# as naive UTC calendar dates on purpose, so DTZ would flag the design
+# rather than a defect.
+select = ["E", "F", "B", "BLE", "SIM", "I"]
+ignore = [
+    # Line length is a formatting concern, not a correctness one.
+    "E501",
+    # FastAPI's dependency injection is expressed as a call in the argument
+    # default. It is the framework's documented idiom, not a mutable default.
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests nest context managers to separate the patches under test from the
+# assertion context wrapping them. Flattening them reads worse.
+"tests/*" = ["SIM117"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

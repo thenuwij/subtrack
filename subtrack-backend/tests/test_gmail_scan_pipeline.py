@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import anthropic
 import httpx
-
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

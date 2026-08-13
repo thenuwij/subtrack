@@ -1,4 +1,8 @@
+import enum
+import uuid
+
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     Column,
@@ -8,16 +12,15 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
+
 from app.database import Base
-import uuid
-import enum
+
 
 class BillingCycle(str, enum.Enum):
     weekly = "weekly"

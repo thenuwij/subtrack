@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 from app.models import PaymentReminder, Subscription
 from app.services.schedules import utc_naive
 
-
 AUTO_TRIAL_NOTE = "Created automatically for this free trial."
 
 

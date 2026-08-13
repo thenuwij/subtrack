@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.middleware.auth import verify_token
 from app.models import PaymentReminder
+from app.services.recurrence import effective_status
 from app.services.reminders import (
     get_owned_subscription,
     list_user_reminders,
@@ -17,9 +18,7 @@ from app.services.reminders import (
     reminder_payload,
     utcnow,
 )
-from app.services.recurrence import effective_status
 from app.services.schedules import utc_naive
-
 
 router = APIRouter(prefix="/reminders", tags=["reminders"])
 ReminderKind = Literal["cancel", "renewal", "trial_end"]

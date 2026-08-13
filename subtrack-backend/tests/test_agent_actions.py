@@ -13,8 +13,8 @@ os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 
 from app.agent.actions import (  # noqa: E402
-    create_action_proposal,
     confirm_action,
+    create_action_proposal,
     reject_action,
 )
 from app.agent.finance import financial_overview  # noqa: E402

@@ -2,8 +2,8 @@ import os
 import unittest
 from unittest.mock import patch
 
-from pydantic import ValidationError
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

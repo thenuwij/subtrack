@@ -202,7 +202,7 @@ def verify_token(
                 key = ECAlgorithm.from_jwk(jwk_dict)
             except Exception as e:  # noqa: BLE001 - malformed public key becomes 401
                 logger.error("Failed to construct EC key from matched JWK: %s", e)
-                raise HTTPException(status_code=401, detail="Invalid or expired token")
+                raise HTTPException(status_code=401, detail="Invalid or expired token") from None
             algorithms = ["ES256"]
         elif algorithm == "HS256":
             # Some legacy Supabase HS256 tokens include a kid. The verified
@@ -232,7 +232,7 @@ def verify_token(
         raise
     except jwt.PyJWTError as e:
         logger.error("JWT verification failed: %s", e)
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from None
     except Exception as e:  # noqa: BLE001 - never leak verifier internals to clients
         logger.error("Unexpected error during token verification: %s", e)
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from None

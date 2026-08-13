@@ -29,9 +29,11 @@ from app.config import settings
 from app.database import SessionLocal, get_db
 from app.gmail.crypto import (
     TokenUndecryptable,
-    check_configured as check_token_encryption_configured,
     decrypt_token,
     encrypt_token,
+)
+from app.gmail.crypto import (
+    check_configured as check_token_encryption_configured,
 )
 from app.middleware.auth import verify_token
 from app.models import (
@@ -1062,7 +1064,7 @@ def start_scan(
             failed_account.scan_stage = None
             db.commit()
         logger.exception("Could not queue Gmail scan for %s", user_id)
-        raise HTTPException(status_code=503, detail="Could not start the inbox scan. Try again shortly.")
+        raise HTTPException(status_code=503, detail="Could not start the inbox scan. Try again shortly.") from None
 
     return {"status": "running", "deadline_seconds": SCAN_TIME_LIMIT_SECONDS}
 
