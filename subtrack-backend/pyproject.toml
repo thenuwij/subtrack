@@ -26,3 +26,7 @@ known-first-party = ["app"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Tests import the `app` package from the project root. Without this they
+# only resolve under `python -m pytest`, which puts the working directory on
+# sys.path — a bare `pytest` would fail.
+pythonpath = ["."]
