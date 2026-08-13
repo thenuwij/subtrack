@@ -4,7 +4,7 @@ Subtrack is a recurring-payment tracker that finds your subscriptions by reading
 
 Deployed live: [subtrack-beryl.vercel.app](https://subtrack-beryl.vercel.app)
 
-## What it does
+## Features at a glance
 
 - Tracks subscriptions, rent, bills, memberships, and other recurring payments.
 - Supports flexible cadences such as fortnightly, every four weeks, quarterly, semiannual, multi-year, and custom every N days/weeks/months/years.
@@ -23,33 +23,33 @@ Subtrack provides spending information and organisation tools, not investment, t
 
 ## How it works
 
-### Finding subscriptions in your inbox
+### Subscriptions you forgot you were paying for
 
 Connecting Gmail grants read-only access. Subtrack searches the last three months for receipts, invoices, and trial notices, then works out the merchant, amount, currency, and billing cadence from what it finds.
 
 Nothing it finds is tracked automatically. Every detection waits in a review queue for your verdict, because email parsing is noisy and a single wrong entry makes the whole total untrustworthy. Anything the scan cannot read confidently is sent to review as unknown rather than guessed at, and a receipt it fails on never costs you the rest of the results.
 
-### Understanding what you actually pay
+### Billing cycles that match reality
 
 Real billing cycles are messier than "monthly". Subtrack handles fortnightly, four-weekly, quarterly, multi-year, and arbitrary custom intervals, and keeps two different numbers apart: a normalized rate for budgeting, and an exact forecast of the charges genuinely landing in a date range. Month-end and leap-year edges are handled properly, so a payment anchored to the 31st does not drift.
 
 It also tracks the shape of a commitment over time — paused, cancelling, ended, still in a free trial, split with someone else, or a variable bill whose amount moves.
 
-### Working in more than one currency
+### Multi-currency without the guesswork
 
 Amounts are stored in the currency you were actually charged in. A converted figure appears only when a genuine exchange rate is available; Subtrack never invents a 1:1 fallback to fill a gap. Every total says how good its conversion is — exact, converted at the current rate, converted at a stale rate, or not converted at all — so a number never looks more precise than it is.
 
-### The assistant
+### An assistant that proposes, never overwrites
 
 The assistant can see your tracked payments and the page you are on, and answer questions about totals, upcoming charges, duplicates, price changes, and where you might be overspending.
 
 It cannot change anything. Every action it suggests — adding, editing, removing, merging, setting a reminder, approving a detection — is only a proposal until you confirm it. Confirming is a separate step that re-checks the record still looks the way it did when the proposal was made, so a stale or mistaken suggestion cannot quietly rewrite your data.
 
-### Keeping your data yours
+### Your data stays yours
 
 Every query is scoped to your verified account, and the browser never talks to the database directly. Gmail access uses read-only scope with encrypted tokens, and disconnecting revokes it. You can export everything Subtrack holds about you, or delete all of it.
 
-## Stack
+## Built with
 
 | Layer | Technology |
 |---|---|
@@ -62,7 +62,7 @@ Every query is scoped to your verified account, and the browser never talks to t
 | Exchange rates | Frankfurter API |
 | Deployment | Vercel frontend, Render API |
 
-## Repository
+## Project structure
 
 ```text
 subtrack/
