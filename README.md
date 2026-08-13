@@ -1,6 +1,6 @@
 # Subtrack
 
-Subtrack is a recurring-payment tracker with a page-aware AI assistant. It finds likely subscriptions and free trials from Gmail, keeps payment totals and reminders in one place, and lets users ask questions or propose changes in natural language.
+Subtrack is a recurring-payment tracker that finds your subscriptions by reading Gmail receipts — no bank-feed access and no manual expense logging. It normalizes what it finds into one view across currencies and billing cadences, and layers a tool-using AI assistant on top for analysis and user-confirmed changes.
 
 Live frontend: [subtrack-beryl.vercel.app](https://subtrack-beryl.vercel.app)
 
@@ -9,14 +9,14 @@ Live frontend: [subtrack-beryl.vercel.app](https://subtrack-beryl.vercel.app)
 - Tracks subscriptions, rent, bills, memberships, and other recurring payments.
 - Supports flexible cadences such as fortnightly, every four weeks, quarterly, semiannual, multi-year, and custom every N days/weeks/months/years.
 - Shows backend-owned normalized monthly/yearly equivalents separately from exact date-window charge forecasts.
-- Detects likely recurring payments and trials from the last three months of Gmail receipts.
+- Detects likely recurring payments and trials from the last three months of Gmail receipts, staged for approval rather than tracked automatically.
 - Creates dashboard reminders for renewals, cancellation dates, and expiring free trials.
+- Flags duplicate records, price changes, and user-labelled opportunities to review costs.
 - Provides a persistent, resizable AI workspace with conversation history and page context.
-- Answers questions about totals, changes, duplicate records, upcoming charges, and user-labelled opportunities to review costs.
 - Proposes add, edit, remove, merge, reminder, and review actions; the user confirms every write before it runs.
 - Researches cheaper alternatives with citations and a bounded per-user cache/rate limit.
 - Supports AUD, USD, GBP, SGD, EUR, and JPY with a persistent shared exchange-rate cache and explicit stale/unconverted states.
-- Distinguishes fixed estimates, variable bills, active/paused/cancelling/cancelled/ended payments, shared bills, and user-controlled essential/optional labels.
+- Distinguishes fixed estimates, variable bills, active/paused/cancelling/cancelled/ended payments, shared bills, and user-controlled essential/optional labels across 17 spending categories.
 - Lets authenticated users export their Subtrack app data or permanently delete all user-owned app records.
 
 Subtrack provides spending information and organisation tools, not investment, tax, credit, or regulated financial advice.
@@ -25,12 +25,13 @@ Subtrack provides spending information and organisation tools, not investment, t
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS |
-| Backend | FastAPI, SQLAlchemy, Alembic |
+| Frontend | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4, Radix UI, `next-themes`, `react-markdown` |
+| Backend | FastAPI, SQLAlchemy 2.0, Alembic |
 | Database | Neon PostgreSQL |
-| Authentication | Supabase Auth with Google OAuth |
-| AI | Anthropic Claude API |
+| Authentication | Supabase Auth — Google OAuth plus email/password sign-up, sign-in, and reset |
+| AI | Anthropic Claude API via the official Python SDK, with a hand-rolled tool-calling loop (no agent framework) |
 | Gmail | Google Gmail API with read-only scope |
+| Exchange rates | Frankfurter API, hourly cache with a persisted shared snapshot |
 | Deployment | Vercel frontend, Render API |
 
 ## Repository
@@ -43,7 +44,43 @@ subtrack/
 └── README.md
 ```
 
-Every user-owned database query is scoped by the verified Supabase user ID. The frontend never connects directly to PostgreSQL. AI write actions are stored as expiring proposals and require explicit confirmation. Gmail OAuth uses user-bound one-time state, PKCE, encrypted refresh tokens, and an authenticated completion step.
+Every user-owned database query is scoped by the verified Supabase user ID. The frontend never connects directly to PostgreSQL. Gmail OAuth uses user-bound one-time state, PKCE, encrypted refresh tokens, and an authenticated completion step.
+
+## Architecture
+
+### Authentication
+
+Supabase issues tokens entirely on the frontend; the backend only verifies them. `verify_token` checks ES256 tokens against the Supabase JWKS and still accepts legacy HS256 tokens, then returns the `user_id` that scopes every query. A Next.js proxy (`proxy.ts`) checks the session server-side and gates `/dashboard`, `/subscriptions`, `/review`, `/assistant`, and `/account`.
+
+Access tokens can expire between being read and being received, so a 401 triggers a refresh-and-replay rather than an immediate sign-out. Supabase refresh tokens are single-use, so that refresh is deduplicated across concurrent requests — the dashboard issues several in parallel, and racing refreshes would otherwise sign the user out despite succeeding.
+
+### Gmail detection
+
+The scanner searches the Purchases category plus receipt, invoice, and trial keywords over a three-month window, then extracts merchant, amount, currency, and cadence using regex heuristics followed by an LLM pass. Results are written to `detected_subscriptions` with a `pending` status and never enter tracked totals until the user approves them — email parsing is noisy, and one wrong entry makes the whole total untrustworthy.
+
+Model calls are batched by sender domain. A row whose cadence is claimed confidently but lacks the backing interval fields is routed to manual review rather than raising, so one malformed row cannot discard its whole batch. Transient provider failures (429/5xx) get bounded explicit retries; timeouts are excluded by name, since `APITimeoutError` subclasses `APIConnectionError` and retrying one would burn the scan's time budget twice.
+
+### Recurrence
+
+`app/services/recurrence.py` is the single authority for cadence normalization, calendar-safe occurrence enumeration (month-end and leap-year edges), lifecycle cutoffs, and monthly/annual equivalents. These formulas are not duplicated in frontend or agent code.
+
+### Multi-currency
+
+Creating or changing a payment through the REST API, Gmail review, or an assistant confirmation puts conversion in the backend's hands. It stores the native currency and amount, plus a base-currency estimate only when a valid shared rate exists. There is no 1:1 fallback — missing FX stays null and unconverted. Every aggregate carries a `conversion_quality` label of `exact`, `current_rate`, `stale_rate`, or `unconverted`, so nothing reads as more precise than it is. Historical native change values stay stable; base-currency history may be re-expressed at the clearly disclosed current snapshot.
+
+### The AI assistant
+
+A manual tool-use loop against the Anthropic Messages API, capped at `MAX_AGENT_STEPS = 8` per turn, with two strictly separated tool families.
+
+**Read tools** are pure, user-scoped database reads: `get_financial_overview`, `list_recurring_payments`, `get_recurring_payment`, `get_upcoming_charges`, `get_commitment_changes`, `find_duplicate_payments`, `list_review_detections`, `get_saving_candidates`, `list_payment_reminders`, plus `research_cheaper_alternatives` and `web_search`. Every response is annotated with scope disclaimers and currency-quality metadata so the model cannot overstate its confidence.
+
+**Action tools** — the ten `propose_*` tools — can only ever create an inert proposal. The model cannot mutate the database. Confirming a proposal is a separate, explicitly authenticated request that re-checks ownership, re-verifies the referenced record has not changed since the proposal was made, and applies the mutation and marks the action complete in one transaction. Proposals expire.
+
+Two details worth noting: IDs reaching the model through page context are treated as untrusted hints, and every tool re-checks ownership server-side before returning anything; and `research_cheaper_alternatives` is cached in `AgentResearchCache` so repeat lookups do not re-hit the model.
+
+### Deployment safety
+
+`/health/ready` compares the applied Alembic revision against the one the running build expects and returns 503 on a definite mismatch, naming both revisions and the fix. A connectivity check alone would report a deploy healthy while every signed-in page 500s on columns that do not exist yet. An unreadable revision on either side is reported as unknown rather than guessed at, so the probe never blocks a release over something it could not determine. `/meta/capabilities` reports which optional integrations are configured.
 
 ## Financial semantics and current boundaries
 
