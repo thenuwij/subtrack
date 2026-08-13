@@ -4,6 +4,9 @@ Subtrack is a recurring-payment tracker that finds your subscriptions by reading
 
 Deployed live: [subtrack-beryl.vercel.app](https://subtrack-beryl.vercel.app)
 
+[![CI](https://github.com/thenuwij/subtrack/actions/workflows/ci.yml/badge.svg)](https://github.com/thenuwij/subtrack/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 ## Features at a glance
 
 - Tracks subscriptions, rent, bills, memberships, and other recurring payments.
