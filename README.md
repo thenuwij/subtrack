@@ -1,6 +1,6 @@
 # Subtrack
 
-Subtrack is a recurring-payment tracker that finds your subscriptions by reading your Gmail receipts — no bank-feed access and no manual expense logging. It normalizes what it finds into one view across currencies and billing cadences, and layers an AI assistant on top for analysis and changes you confirm.
+Subtrack is a recurring-payment tracker that finds your subscriptions by reading your Gmail receipts. No bank-feed access, no manual expense logging. It normalizes what it finds into one view across currencies and billing cadences, and layers an AI assistant on top for analysis and changes you confirm.
 
 Deployed live: [subtrack-beryl.vercel.app](https://subtrack-beryl.vercel.app)
 
@@ -35,17 +35,17 @@ Nothing it finds is tracked automatically. Every detection waits in a review que
 
 Real billing cycles are messier than "monthly". Subtrack handles fortnightly, four-weekly, quarterly, multi-year, and arbitrary custom intervals, and keeps two different numbers apart: a normalized rate for budgeting, and an exact forecast of the charges genuinely landing in a date range. Month-end and leap-year edges are handled properly, so a payment anchored to the 31st does not drift.
 
-It also tracks the shape of a commitment over time — paused, cancelling, ended, still in a free trial, split with someone else, or a variable bill whose amount moves.
+It also tracks the shape of a commitment over time: paused, cancelling, ended, still in a free trial, split with someone else, or a variable bill whose amount moves.
 
 ### Multi-currency totals
 
-Amounts are stored in the currency you were actually charged in. A converted figure appears only when a genuine exchange rate is available; Subtrack never invents a 1:1 fallback to fill a gap. Every total says how good its conversion is — exact, converted at the current rate, converted at a stale rate, or not converted at all — so a number never looks more precise than it is.
+Amounts are stored in the currency you were actually charged in. A converted figure appears only when a genuine exchange rate is available; Subtrack never invents a 1:1 fallback to fill a gap. Every total says how good its conversion is: exact, converted at the current rate, converted at a stale rate, or not converted at all. A number never looks more precise than it is.
 
 ### AI agentic assistance
 
-The assistant reads your tracked payments and the page you are on, and works across them: totals and upcoming charges, duplicates and price rises, where you are overspending, and what a cheaper alternative would cost — researched live, with citations.
+The assistant reads your tracked payments and the page you are on, and works across them: totals and upcoming charges, duplicates and price rises, where you are overspending, and what a cheaper alternative would cost, researched live with citations.
 
-It cannot change anything. Every action it suggests — adding, editing, removing, merging, setting a reminder, approving a detection — is only a proposal until you confirm it. Confirming is a separate step that re-checks the record still looks the way it did when the proposal was made, so a stale or mistaken suggestion cannot quietly rewrite your data.
+It cannot change anything. Everything it suggests is only a proposal until you confirm it, whether that is adding, editing, removing, merging, setting a reminder, or approving a detection. Confirming is a separate step that re-checks the record still looks the way it did when the proposal was made, so a stale or mistaken suggestion cannot quietly rewrite your data.
 
 ### Your data stays yours
 
@@ -58,7 +58,7 @@ Every query is scoped to your verified account, and the browser never talks to t
 | Frontend | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4, Radix UI |
 | Backend | FastAPI, SQLAlchemy 2.0, Alembic |
 | Database | Neon PostgreSQL |
-| Authentication | Supabase Auth — Google OAuth plus email/password sign-up, sign-in, and reset |
+| Authentication | Supabase Auth, with Google OAuth plus email/password sign-up, sign-in, and reset |
 | AI | Anthropic Claude API |
 | Gmail | Google Gmail API with read-only scope |
 | Exchange rates | Frankfurter API |
@@ -78,6 +78,6 @@ subtrack/
 
 - **Normalized equivalent** spreads a recurring commitment into a budgeting rate. Day cadences use 365 days/year and week cadences use 52 weeks/year. It does not mean the payment is charged monthly.
 - **Exact forecast** counts the real charges falling inside a date window. It honours end and cancellation dates and does not use prorated averages.
-- **Recorded history** means changes to tracked commitments and what was found in email — not a complete bank-transaction ledger. Subtrack does not claim exact historical spending.
+- **Recorded history** means changes to tracked commitments and what was found in email, not a complete bank-transaction ledger. Subtrack does not claim exact historical spending.
 - Billing and reminder dates are treated as calendar dates, so a timezone difference can never shift a bill to the previous day.
 - Variable bills use the latest amount you approved, clearly labelled as an estimate.
