@@ -231,7 +231,7 @@ Rules:
     response = None
     for _ in range(3):
         response = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5",
             max_tokens=1_800,
             system=system,
             tools=[WEB_SEARCH_TOOL],

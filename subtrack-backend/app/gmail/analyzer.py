@@ -74,7 +74,10 @@ ANALYSIS_RETRY_BACKOFF_SECONDS = 1.5
 # other batches their share of the remaining budget.
 ANALYSIS_MIN_CALL_SECONDS = 8.0
 
-MODEL = "claude-sonnet-5"
+# Haiku 4.5 predates the effort parameter and adaptive thinking: passing
+# output_config.effort is rejected, and thinking is off unless asked for. The
+# calls below therefore carry neither.
+MODEL = "claude-haiku-4-5"
 
 # How many sender-domain groups to analyze per API call.
 GROUPS_PER_CALL = 8
@@ -505,8 +508,6 @@ def _analyze_chunk(
                 # emits, not for the ceiling, and truncated JSON fails to parse
                 # and would discard the whole batch.
                 max_tokens=16000,
-                thinking={"type": "disabled"},
-                output_config={"effort": "low"},
                 output_format=AnalysisResult,
                 system=SYSTEM,
                 messages=[{"role": "user", "content": prompt}],
@@ -829,8 +830,6 @@ def find_similar(
         response = client.with_options(timeout=remaining, max_retries=0).messages.parse(
             model=MODEL,
             max_tokens=2500,
-            thinking={"type": "disabled"},
-            output_config={"effort": "low"},
             output_format=SimilarityResult,
             system=SIMILARITY_SYSTEM,
             messages=[{
@@ -889,8 +888,6 @@ def find_duplicates(subscriptions: list) -> list[tuple[int, int, str]]:
         response = client.messages.parse(
             model=MODEL,
             max_tokens=3000,
-            thinking={"type": "disabled"},
-            output_config={"effort": "low"},
             output_format=DuplicateResult,
             system=SIMILARITY_SYSTEM + "\n\nHere you are checking one list against "
                    "itself. Report a pair only when both rows are the same service and "

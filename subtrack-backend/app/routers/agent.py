@@ -363,7 +363,7 @@ def _stream_reply(
             # does not reserve one of Render's limited database connections.
             db.commit()
             with client.messages.stream(
-                model="claude-sonnet-4-6",
+                model="claude-haiku-4-5",
                 max_tokens=1_500,
                 system=_system_prompt(page_context),
                 tools=TOOL_DEFINITIONS,
