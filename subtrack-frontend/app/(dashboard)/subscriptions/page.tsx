@@ -663,7 +663,7 @@ export default function SubscriptionsPage() {
       </div>
 
       {!loading && subscriptions.length > 0 ? (
-        <aside className="hidden space-y-4 xl:sticky xl:top-8 xl:block" aria-label="Payments summary">
+        <aside className="hidden space-y-4 xl:sticky xl:top-8 xl:block xl:max-h-[calc(100vh-4rem)] xl:overflow-y-auto" aria-label="Payments summary">
           <section className="rounded-2xl bg-card p-5 shadow-sm">
             <p className="text-xs font-medium text-muted-foreground">
               {hasVariableAmounts ? 'Estimated monthly commitment' : 'Monthly commitment'}

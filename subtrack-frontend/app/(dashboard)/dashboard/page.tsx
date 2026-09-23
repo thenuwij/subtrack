@@ -356,7 +356,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="space-y-10">
 
         {loadError && (
@@ -442,6 +442,8 @@ export default function DashboardPage() {
           ) : null}
         </section>
 
+        <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start xl:gap-8">
+        <div className="min-w-0 space-y-10 xl:col-start-2 xl:row-start-1 xl:space-y-6">
         <ReminderCenter
           reminders={reminders}
           onDismiss={handleDismissReminder}
@@ -501,6 +503,9 @@ export default function DashboardPage() {
           </section>
         )}
 
+        </div>
+
+        <div className="min-w-0 space-y-10 xl:col-start-1 xl:row-start-1 xl:space-y-8">
         {/* ── Where your money goes ───────────────────────────────────── */}
         <SpendBreakdown
           ranked={ranked}
@@ -634,6 +639,8 @@ export default function DashboardPage() {
             </p>
           ) : null}
         </section>
+        </div>
+        </div>
       </div>
     </div>
   )
