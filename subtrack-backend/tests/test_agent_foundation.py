@@ -1,6 +1,9 @@
+import json
 import os
 import unittest
 from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 from sqlalchemy import create_engine
@@ -16,6 +19,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 from app.agent.tools import READ_TOOL_DEFINITIONS, TOOL_DEFINITIONS  # noqa: E402
 from app.database import Base  # noqa: E402
 from app.models import AgentMessage, AgentThread  # noqa: E402
+from app.routers import agent as agent_router  # noqa: E402
 from app.routers.agent import (  # noqa: E402
     AGENT_ATTEMPTS_PER_MINUTE,
     AgentPageContext,
@@ -27,6 +31,7 @@ from app.routers.agent import (  # noqa: E402
     _public_error,
     _safe_context_json,
     _sse,
+    _stream_reply,
     _title_from_message,
     _utcnow,
     list_messages,
@@ -246,6 +251,61 @@ class AgentFoundationTests(unittest.TestCase):
 
         self.assertEqual(page["messages"][0]["status"], "failed")
         self.assertEqual(page["messages"][0]["error_code"], "stream_interrupted")
+        db.close()
+
+    def test_multi_step_reply_separates_text_from_each_step(self):
+        db = self.Session()
+        thread = AgentThread(
+            id=uuid4(), user_id="user-1", title="Steps", next_message_sequence=2
+        )
+        question = AgentMessage(
+            id=uuid4(), thread_id=thread.id, user_id="user-1",
+            role="user", sequence=1, content="What do I pay?", status="completed",
+        )
+        answer = AgentMessage(
+            id=uuid4(), thread_id=thread.id, user_id="user-1",
+            role="assistant", sequence=2, content="", status="streaming",
+            reply_to_id=question.id,
+        )
+        db.add_all([thread, question, answer])
+        db.commit()
+
+        tool_call = SimpleNamespace(
+            type="tool_use", id="tool-1", name="get_financial_overview", input={}
+        )
+        steps = iter([
+            (["Let me check."], SimpleNamespace(stop_reason="tool_use", content=[tool_call])),
+            (["You pay $5."], SimpleNamespace(stop_reason="end_turn", content=[])),
+        ])
+
+        class FakeStream:
+            def __init__(self, chunks, final):
+                self.text_stream = chunks
+                self.final = final
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def get_final_message(self):
+                return self.final
+
+        with patch.object(
+            agent_router.client.messages, "stream",
+            side_effect=lambda **_: FakeStream(*next(steps)),
+        ), patch.object(agent_router, "run_tool", return_value={}):
+            events = list(_stream_reply(db, thread.id, answer.id, "user-1"))
+
+        streamed = "".join(
+            json.loads(event.split("data: ", 1)[1])["text"]
+            for event in events if event.startswith("event: delta")
+        )
+        db.refresh(answer)
+        self.assertEqual(streamed, "Let me check.\n\nYou pay $5.")
+        self.assertEqual(answer.content, "Let me check.\n\nYou pay $5.")
+        self.assertEqual(answer.status, "completed")
         db.close()
 
 

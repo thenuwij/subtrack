@@ -362,6 +362,7 @@ def _stream_reply(
             # transaction before waiting on Anthropic so a streaming request
             # does not reserve one of Render's limited database connections.
             db.commit()
+            separate_step = bool("".join(accumulated_text).strip())
             with client.messages.stream(
                 model="claude-haiku-4-5",
                 max_tokens=1_500,
@@ -370,6 +371,10 @@ def _stream_reply(
                 messages=messages,
             ) as stream:
                 for text in stream.text_stream:
+                    if separate_step:
+                        separate_step = False
+                        accumulated_text.append("\n\n")
+                        yield _sse("delta", {"text": "\n\n"})
                     accumulated_text.append(text)
                     yield _sse("delta", {"text": text})
                 response = stream.get_final_message()
