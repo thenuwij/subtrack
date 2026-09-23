@@ -563,6 +563,7 @@ export function AgentWorkspace({
   }
 
   const activeThread = threads.find(thread => thread.id === activeThreadId)
+  const composerLocked = Boolean(activeThread?.archived)
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-card text-card-foreground">
@@ -859,9 +860,9 @@ export function AgentWorkspace({
             value={input}
             onChange={event => setInput(event.target.value)}
             onKeyDown={handleComposerKeyDown}
-            disabled={loading || showArchived}
+            disabled={loading || composerLocked}
             maxLength={8_000}
-            placeholder={showArchived ? 'Restore or start a conversation to continue' : 'Ask about your recurring finances…'}
+            placeholder={composerLocked ? 'Restore this conversation to continue' : 'Ask about your recurring finances…'}
             aria-label="Message Subtrack assistant"
             className="max-h-32 min-h-9 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground disabled:opacity-60"
           />
@@ -875,7 +876,7 @@ export function AgentWorkspace({
               <Square className="fill-current" />
             </Button>
           ) : (
-            <Button size="icon" onClick={() => void send()} disabled={!input.trim() || showArchived} aria-label="Send message">
+            <Button size="icon" onClick={() => void send()} disabled={!input.trim() || composerLocked} aria-label="Send message">
               <Send />
             </Button>
           )}

@@ -578,6 +578,7 @@ export default function SubscriptionsPage() {
             totalLabel={totalLabel}
             searchQuery={search}
             onSearchChange={setSearch}
+            hasFilters={isFiltered}
             onClearFilters={() => {
               setScope('current')
               setSearch('')
@@ -599,15 +600,15 @@ export default function SubscriptionsPage() {
                   ? 'No results for your search'
                   : selectedCategory
                   ? `No ${formatCategory(selectedCategory)} items`
+                  : period !== 'all' || fromDate || toDate
+                    ? 'No payments due in this period'
                   : scope === 'current'
                     ? 'No current payments'
                   : scope === 'paused'
                     ? 'No paused payments'
                     : scope === 'history'
                       ? 'No payment history yet'
-                      : scope === 'all'
-                        ? 'No payments match these filters'
-                  : 'No items in this period'}
+                      : 'No payments match these filters'}
               </p>
               <Button
                 variant="ghost"

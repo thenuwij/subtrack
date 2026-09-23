@@ -23,6 +23,7 @@ interface FilterBarProps {
   totalLabel: string
   searchQuery: string
   onSearchChange: (q: string) => void
+  hasFilters: boolean
   onClearFilters: () => void
 }
 
@@ -50,10 +51,9 @@ export function FilterBar({
   totalLabel,
   searchQuery,
   onSearchChange,
+  hasFilters,
   onClearFilters,
 }: FilterBarProps) {
-  const hasFilters = Boolean(searchQuery || selectedCategory || period !== 'all' || fromDate || toDate)
-
   return (
     <div className="flex flex-col gap-3">
 
@@ -159,11 +159,7 @@ export function FilterBar({
         <button
           type="button"
           onClick={() => onSortOrderChange(sortOrder === 'desc' ? 'asc' : 'desc')}
-          className={`flex items-center gap-1.5 h-8 rounded-lg px-3 text-xs font-medium transition-colors shrink-0 ${
-            sortOrder === 'desc'
-              ? 'bg-muted text-foreground'
-              : 'bg-muted text-foreground'
-          } hover:bg-muted/70`}
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-muted px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted/70"
           aria-label={`Sort by ${sortOrder === 'asc' ? 'latest' : 'soonest'} expected payment first`}
         >
           {sortOrder === 'desc'

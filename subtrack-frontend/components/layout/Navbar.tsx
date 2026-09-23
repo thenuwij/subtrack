@@ -96,6 +96,14 @@ export default function Navbar() {
           <LogoMark className="h-6 w-6" />
           <span className="text-sm font-semibold tracking-tight text-foreground">Subtrack</span>
         </Link>
+        <button
+          type="button"
+          onClick={handleLogout}
+          aria-label="Log out"
+          className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <LogOut className="h-4 w-4" />
+        </button>
       </header>
 
       <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-sidebar px-3 py-6 md:flex">
