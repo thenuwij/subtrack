@@ -14,7 +14,12 @@ import {
 import { Category, DuplicatePair, Subscription, SubscriptionInput } from '@/types'
 import { SubscriptionCard }       from '@/components/subscriptions/SubscriptionCard'
 import { AddSubscriptionModal }   from '@/components/subscriptions/AddSubscriptionModal'
-import { FilterBar, type SortKey } from '@/components/shared/FilterBar'
+import {
+  FilterBar,
+  type Period,
+  type RecordScope,
+  type SortKey,
+} from '@/components/shared/FilterBar'
 import { Button }                 from '@/components/ui/button'
 import { Skeleton }               from '@/components/ui/skeleton'
 import { Plus, CreditCard }       from 'lucide-react'
@@ -37,8 +42,6 @@ import {
   storedDateKey,
   todayUtcDateKey,
 } from '@/lib/utils/dates'
-
-type RecordScope = 'current' | 'paused' | 'history' | 'all'
 
 function inPeriod(dateStr: string | null, period: 'all' | 'day' | 'week' | 'month'): boolean {
   if (period === 'all') return true
@@ -81,7 +84,7 @@ export default function SubscriptionsPage() {
   // filter / sort / group state
   const [search, setSearch]                   = useState('')
   const [selectedCategory, setSelectedCategory] = useState<Category | ''>('')
-  const [period, setPeriod]                   = useState<'all' | 'day' | 'week' | 'month'>('all')
+  const [period, setPeriod]                   = useState<Period>('all')
   const [fromDate, setFromDate]               = useState('')
   const [toDate, setToDate]                   = useState('')
   const [sortBy, setSortBy]                   = useState<SortKey>('due')
@@ -300,10 +303,13 @@ export default function SubscriptionsPage() {
       if (scope === 'history' && !isTerminalStatus(s.status)) return false
       if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false
       if (selectedCategory && s.category !== selectedCategory) return false
-      if (!inPeriod(s.next_expected_at, period)) return false
-      const dueDate = storedDateKey(s.next_expected_at)
-      if (fromDate && (!dueDate || dueDate < fromDate)) return false
-      if (toDate && (!dueDate || dueDate > toDate)) return false
+      if (period === 'custom') {
+        const dueDate = storedDateKey(s.next_expected_at)
+        if (fromDate && (!dueDate || dueDate < fromDate)) return false
+        if (toDate && (!dueDate || dueDate > toDate)) return false
+      } else if (!inPeriod(s.next_expected_at, period)) {
+        return false
+      }
       return true
     })
     const monthlyCost = (subscription: Subscription) =>
@@ -346,7 +352,14 @@ export default function SubscriptionsPage() {
       : `${filtered.length} item${filtered.length !== 1 ? 's' : ''} · ${formatCurrency(totalAmount, baseCurrency)}/mo current commitment${filteredUnavailable ? ` · ${filteredUnavailable} excluded (FX unavailable)` : ''}`
     : ''
 
-  const isFiltered = !!(scope !== 'current' || search || selectedCategory || period !== 'all' || fromDate || toDate)
+  const scopeCounts: Record<RecordScope, number> = {
+    current: current.length,
+    paused: subscriptions.filter(item => item.status === 'paused').length,
+    history: subscriptions.filter(item => isTerminalStatus(item.status)).length,
+    all: subscriptions.length,
+  }
+
+  const isFiltered = !!(scope !== 'current' || search || selectedCategory || period !== 'all')
 
   useRegisterAgentPageContext({
     selected_subscription_ids: editingSubscription
@@ -360,9 +373,12 @@ export default function SubscriptionsPage() {
     filters: {
       ...(search ? { search } : {}),
       ...(selectedCategory ? { category: selectedCategory } : {}),
-      due_period: period,
-      ...(fromDate ? { from_date: fromDate } : {}),
-      ...(toDate ? { to_date: toDate } : {}),
+      ...(period === 'custom'
+        ? {
+            ...(fromDate ? { from_date: fromDate } : {}),
+            ...(toDate ? { to_date: toDate } : {}),
+          }
+        : { due_period: period }),
       sort_by: sortBy,
       group_by_category: groupByCategory,
       record_scope: scope,
@@ -550,35 +566,15 @@ export default function SubscriptionsPage() {
       {/* FilterBar + list */}
       {!loading && subscriptions.length > 0 && (
         <>
-          <div className="flex flex-wrap items-center gap-1 rounded-xl bg-muted p-1" role="group" aria-label="Payment record scope">
-            {([
-              { value: 'current', label: 'Current', count: current.length },
-              { value: 'paused', label: 'Paused', count: subscriptions.filter(item => item.status === 'paused').length },
-              { value: 'history', label: 'History', count: subscriptions.filter(item => isTerminalStatus(item.status)).length },
-              { value: 'all', label: 'All', count: subscriptions.length },
-            ] as const).map(option => (
-              <button
-                key={option.value}
-                type="button"
-                aria-pressed={scope === option.value}
-                onClick={() => setScope(option.value)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                  scope === option.value
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {option.label} <span className="ml-1 tabular-nums opacity-70">{option.count}</span>
-              </button>
-            ))}
-          </div>
-
           <FilterBar
+            scope={scope}
+            scopeCounts={scopeCounts}
+            onScopeChange={setScope}
             categories={categories}
             selectedCategory={selectedCategory}
             onCategoryChange={category => setSelectedCategory(category as Category | '')}
             period={period}
-            onPeriodChange={p => setPeriod(p as 'all' | 'day' | 'week' | 'month')}
+            onPeriodChange={setPeriod}
             fromDate={fromDate}
             toDate={toDate}
             onFromDateChange={setFromDate}
@@ -590,9 +586,7 @@ export default function SubscriptionsPage() {
             totalLabel={totalLabel}
             searchQuery={search}
             onSearchChange={setSearch}
-            hasFilters={isFiltered}
             onClearFilters={() => {
-              setScope('current')
               setSearch('')
               setSelectedCategory('')
               setPeriod('all')
@@ -612,7 +606,7 @@ export default function SubscriptionsPage() {
                   ? 'No results for your search'
                   : selectedCategory
                   ? `No ${formatCategory(selectedCategory)} items`
-                  : period !== 'all' || fromDate || toDate
+                  : period !== 'all'
                     ? 'No payments due in this period'
                   : scope === 'current'
                     ? 'No current payments'
