@@ -66,6 +66,7 @@ class AgentPageFilters(BaseModel):
     from_date: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     to_date: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     sort_order: Optional[Literal["asc", "desc"]] = None
+    sort_by: Optional[Literal["due", "amount", "name", "recent"]] = None
     group_by_category: Optional[bool] = None
     review_status: Optional[Literal["pending", "dismissed"]] = None
     record_scope: Optional[Literal["current", "paused", "history", "all"]] = None

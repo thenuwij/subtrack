@@ -14,7 +14,7 @@ import {
 import { Category, DuplicatePair, Subscription, SubscriptionInput } from '@/types'
 import { SubscriptionCard }       from '@/components/subscriptions/SubscriptionCard'
 import { AddSubscriptionModal }   from '@/components/subscriptions/AddSubscriptionModal'
-import { FilterBar }              from '@/components/shared/FilterBar'
+import { FilterBar, type SortKey } from '@/components/shared/FilterBar'
 import { Button }                 from '@/components/ui/button'
 import { Skeleton }               from '@/components/ui/skeleton'
 import { Plus, CreditCard }       from 'lucide-react'
@@ -84,7 +84,7 @@ export default function SubscriptionsPage() {
   const [period, setPeriod]                   = useState<'all' | 'day' | 'week' | 'month'>('all')
   const [fromDate, setFromDate]               = useState('')
   const [toDate, setToDate]                   = useState('')
-  const [sortOrder, setSortOrder]             = useState<'desc' | 'asc'>('asc')
+  const [sortBy, setSortBy]                   = useState<SortKey>('due')
   const [groupByCategory, setGroupByCategory] = useState(false)
   const [scope, setScope]                     = useState<RecordScope>('current')
 
@@ -306,16 +306,28 @@ export default function SubscriptionsPage() {
       if (toDate && (!dueDate || dueDate > toDate)) return false
       return true
     })
+    const monthlyCost = (subscription: Subscription) =>
+      convertAmount(monthlyEquivalentNative(subscription), subscription.currency)
     list = [...list].sort((a, b) => {
+      if (sortBy === 'name') return a.name.localeCompare(b.name)
+      if (sortBy === 'recent') return b.created_at.localeCompare(a.created_at)
+      if (sortBy === 'amount') {
+        const ma = monthlyCost(a)
+        const mb = monthlyCost(b)
+        if (ma === null && mb === null) return a.name.localeCompare(b.name)
+        if (ma === null) return 1
+        if (mb === null) return -1
+        return mb - ma
+      }
       const da = a.next_expected_at ?? ''
       const db = b.next_expected_at ?? ''
       if (!da && !db) return 0
       if (!da) return 1
       if (!db) return -1
-      return sortOrder === 'desc' ? db.localeCompare(da) : da.localeCompare(db)
+      return da.localeCompare(db)
     })
     return list
-  }, [subscriptions, scope, search, selectedCategory, period, fromDate, toDate, sortOrder])
+  }, [subscriptions, scope, search, selectedCategory, period, fromDate, toDate, sortBy, convertAmount])
 
   const filteredContributing = filtered.filter(contributesToCommitment)
   const filteredConvertible = filteredContributing.filter(
@@ -351,7 +363,7 @@ export default function SubscriptionsPage() {
       due_period: period,
       ...(fromDate ? { from_date: fromDate } : {}),
       ...(toDate ? { to_date: toDate } : {}),
-      sort_order: sortOrder,
+      sort_by: sortBy,
       group_by_category: groupByCategory,
       record_scope: scope,
     },
@@ -571,8 +583,8 @@ export default function SubscriptionsPage() {
             toDate={toDate}
             onFromDateChange={setFromDate}
             onToDateChange={setToDate}
-            sortOrder={sortOrder}
-            onSortOrderChange={setSortOrder}
+            sortBy={sortBy}
+            onSortByChange={setSortBy}
             groupByCategory={groupByCategory}
             onGroupByCategoryChange={setGroupByCategory}
             totalLabel={totalLabel}

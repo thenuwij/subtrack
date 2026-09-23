@@ -23,7 +23,7 @@ export interface AgentPageFilters {
   due_period?: 'all' | 'day' | 'week' | 'month'
   from_date?: string
   to_date?: string
-  sort_order?: 'asc' | 'desc'
+  sort_by?: 'due' | 'amount' | 'name' | 'recent'
   group_by_category?: boolean
   review_status?: 'pending' | 'dismissed'
   record_scope?: 'current' | 'paused' | 'history' | 'all'
