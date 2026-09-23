@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { getPreferences, updatePreferences, getRates } from '@/lib/api'
 import type { Currency, Preferences } from '@/types'
@@ -44,21 +44,22 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading]           = useState(true)
   const [rates, setRates]                   = useState<Record<string, number>>({})
   const [ratesLoading, setRatesLoading]     = useState(true)
-  const [ratesFetchedAt, setRatesFetchedAt] = useState<Date | null>(null)
-  const [ratesFetchedFor, setRatesFetchedFor] = useState<string | null>(null)
+  const ratesFetchedAt = useRef<Date | null>(null)
+  const ratesFetchedFor = useRef<string | null>(null)
   const [isUpdating, setIsUpdating] = useState(false)
   const [ratesStale, setRatesStale] = useState(false)
   const [ratesAsOf, setRatesAsOf] = useState<string | null>(null)
 
-  async function fetchRates(currency: string, token: string) {
+  const fetchRates = useCallback(async (currency: string, token: string) => {
     const now = new Date()
+    const fetchedAt = ratesFetchedAt.current
     if (
-      ratesFetchedAt &&
-      ratesFetchedFor === currency &&
-      now.getTime() - ratesFetchedAt.getTime() < 60 * 60 * 1000
+      fetchedAt &&
+      ratesFetchedFor.current === currency &&
+      now.getTime() - fetchedAt.getTime() < 60 * 60 * 1000
     ) return
 
-    const baseChanged = ratesFetchedFor !== null && ratesFetchedFor !== currency
+    const baseChanged = ratesFetchedFor.current !== null && ratesFetchedFor.current !== currency
     if (baseChanged) setRates({})
     setRatesLoading(true)
     try {
@@ -66,8 +67,8 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
       setRates(data.rates)
       setRatesStale(Boolean(data.stale))
       setRatesAsOf(data.provider_date ?? data.fetched_at)
-      setRatesFetchedAt(now)
-      setRatesFetchedFor(currency)
+      ratesFetchedAt.current = now
+      ratesFetchedFor.current = currency
     } catch (error) {
       // Rates are base-specific. Never reuse a prior base's table as though it
       // belonged to the newly selected currency.
@@ -80,7 +81,7 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setRatesLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     async function load() {
@@ -106,7 +107,7 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
     void load()
   }, []) // eslint-disable-line
 
-  async function setBaseCurrency(currency: Currency) {
+  const setBaseCurrency = useCallback(async (currency: Currency) => {
     if (currency === baseCurrency) {
       return {
         preferences: {
@@ -134,8 +135,8 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
       setRates({})
       setRatesStale(false)
       setRatesAsOf(null)
-      setRatesFetchedAt(null)
-      setRatesFetchedFor(null)
+      ratesFetchedAt.current = null
+      ratesFetchedFor.current = null
       let ratesAvailable = true
       try {
         await fetchRates(currency, session.access_token)
@@ -146,23 +147,28 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsUpdating(false)
     }
-  }
+  }, [baseCurrency, fetchRates, rates])
 
-  function convertAmount(amount: number, from: string): number | null {
+  const convertAmount = useCallback((amount: number, from: string): number | null => {
     if (from === baseCurrency) return amount
     const rate = rates[from]
     if (!rate) return null
     return amount / rate
-  }
+  }, [baseCurrency, rates])
 
-  function canConvert(from: string): boolean {
+  const canConvert = useCallback((from: string): boolean => {
     if (from === baseCurrency) return true
     const rate = rates[from]
     return Number.isFinite(rate) && rate > 0
-  }
+  }, [baseCurrency, rates])
+
+  const value = useMemo(
+    () => ({ baseCurrency, setBaseCurrency, isLoading, isUpdating, rates, ratesLoading, ratesStale, ratesAsOf, canConvert, convertAmount }),
+    [baseCurrency, setBaseCurrency, isLoading, isUpdating, rates, ratesLoading, ratesStale, ratesAsOf, canConvert, convertAmount],
+  )
 
   return (
-    <CurrencyContext.Provider value={{ baseCurrency, setBaseCurrency, isLoading, isUpdating, rates, ratesLoading, ratesStale, ratesAsOf, canConvert, convertAmount }}>
+    <CurrencyContext.Provider value={value}>
       {children}
     </CurrencyContext.Provider>
   )
