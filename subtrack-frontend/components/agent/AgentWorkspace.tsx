@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -157,6 +158,23 @@ function readableDate(value: string) {
   }).format(date)
 }
 
+const markdownPlugins = [remarkGfm]
+const markdownComponents = {
+  a: ({ children, ...props }: React.ComponentProps<'a'>) => (
+    <a {...props} target="_blank" rel="noreferrer">{children}</a>
+  ),
+}
+
+const MessageMarkdown = memo(function MessageMarkdown({ content }: { content: string }) {
+  return (
+    <div className="prose prose-sm max-w-none dark:prose-invert prose-p:my-2 prose-table:text-xs prose-td:py-1 prose-th:py-1">
+      <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  )
+})
+
 async function accessToken() {
   const { data: { session } } = await createClient().auth.getSession()
   if (!session) throw new Error('Your session has expired. Please sign in again.')
@@ -202,6 +220,8 @@ export function AgentWorkspace({
   const threadCreateBusyRef = useRef(false)
   const actionBusyRef = useRef(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLElement>(null)
+  const stickToBottomRef = useRef(true)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const selectActiveThread = useCallback((id: string) => {
@@ -221,7 +241,7 @@ export function AgentWorkspace({
       const result = await listAgentThreads(token, showArchived)
       if (requestId !== threadLoadRef.current) return
       setThreads(result)
-      const wanted = preferredId ?? activeThreadId
+      const wanted = preferredId ?? activeThreadRef.current
       if (wanted && result.some(thread => thread.id === wanted)) return
       if (result[0]) selectActiveThread(result[0].id)
       else clearSelectedThread()
@@ -229,7 +249,7 @@ export function AgentWorkspace({
       if (requestId !== threadLoadRef.current) return
       setLoadError(error instanceof Error ? error.message : 'Could not load conversations.')
     }
-  }, [activeThreadId, clearSelectedThread, selectActiveThread, showArchived, tokenProvider])
+  }, [clearSelectedThread, selectActiveThread, showArchived, tokenProvider])
 
   const loadMessages = useCallback(async (
     threadId: string,
@@ -273,6 +293,7 @@ export function AgentWorkspace({
 
   useEffect(() => {
     activeThreadRef.current = activeThreadId
+    stickToBottomRef.current = true
     if (skipNextMessageLoadRef.current === activeThreadId) {
       skipNextMessageLoadRef.current = null
       return
@@ -292,8 +313,24 @@ export function AgentWorkspace({
   }, [activeThreadId, loading, loadMessages, messages])
 
   useEffect(() => {
-    if (!loadingHistory) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (!loadingHistory && stickToBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ block: 'end' })
+    }
   }, [loadingHistory, messages])
+
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    textarea.style.height = `${textarea.scrollHeight}px`
+  }, [input])
+
+  function handleScroll() {
+    const element = scrollRef.current
+    if (!element) return
+    stickToBottomRef.current =
+      element.scrollHeight - element.scrollTop - element.clientHeight < 80
+  }
 
   useEffect(() => {
     if (!draftRequest) return
@@ -381,6 +418,7 @@ export function AgentWorkspace({
     const threadId = thread.id
     const userId = `local-user-${crypto.randomUUID()}`
     const assistantId = `local-assistant-${crypto.randomUUID()}`
+    stickToBottomRef.current = true
     setInput('')
     setMessages(current => [
       ...current,
@@ -393,6 +431,7 @@ export function AgentWorkspace({
 
     const controller = new AbortController()
     abortRef.current = controller
+    let completed = false
     try {
       const token = await tokenProvider()
       await sendAgentMessage(
@@ -401,10 +440,16 @@ export function AgentWorkspace({
         text,
         crypto.randomUUID(),
         pageContext,
-        event => handleStreamEvent(event, assistantId),
+        event => {
+          if (event.type === 'done') completed = true
+          handleStreamEvent(event, assistantId)
+        },
         controller.signal
       )
-      await Promise.all([loadMessages(threadId), loadThreads(threadId)])
+      await Promise.all([
+        completed ? Promise.resolve() : loadMessages(threadId),
+        loadThreads(threadId),
+      ])
     } catch (error) {
       const stopped = error instanceof DOMException && error.name === 'AbortError'
       setMessages(current => current.map(message =>
@@ -443,16 +488,23 @@ export function AgentWorkspace({
     setStatusText('Trying again…')
     const controller = new AbortController()
     abortRef.current = controller
+    let completed = false
     try {
       const token = await tokenProvider()
       await retryAgentMessage(
         token,
         activeThreadId,
         message.id,
-        event => handleStreamEvent(event, temporaryId),
+        event => {
+          if (event.type === 'done') completed = true
+          handleStreamEvent(event, temporaryId)
+        },
         controller.signal
       )
-      await Promise.all([loadMessages(activeThreadId), loadThreads(activeThreadId)])
+      await Promise.all([
+        completed ? Promise.resolve() : loadMessages(activeThreadId),
+        loadThreads(activeThreadId),
+      ])
     } catch (error) {
       setMessages(current => current.map(item =>
         item.id === temporaryId
@@ -737,6 +789,8 @@ export function AgentWorkspace({
       ) : null}
 
       <main
+        ref={scrollRef}
+        onScroll={handleScroll}
         className={`min-h-0 flex-1 overflow-y-auto px-4 py-5 ${variant === 'page' && showHistory ? 'md:pl-[20rem]' : ''}`}
         aria-live="polite"
         aria-busy={loading}
@@ -800,20 +854,7 @@ export function AgentWorkspace({
               </div>
             ) : (
               <div key={message.id} className="max-w-[92%] text-sm leading-6 text-foreground">
-                {message.content ? (
-                  <div className="prose prose-sm max-w-none dark:prose-invert prose-p:my-2 prose-table:text-xs prose-td:py-1 prose-th:py-1">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        a: ({ children, ...props }) => (
-                          <a {...props} target="_blank" rel="noreferrer">{children}</a>
-                        ),
-                      }}
-                    >
-                      {message.content}
-                    </ReactMarkdown>
-                  </div>
-                ) : null}
+                {message.content ? <MessageMarkdown content={message.content} /> : null}
                 {(message.actions ?? []).map(action => (
                   <AgentActionCard
                     key={action.id}
