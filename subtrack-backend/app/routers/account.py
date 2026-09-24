@@ -19,7 +19,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
-from app.middleware.auth import verify_token
+from app.middleware.auth import reject_demo_user, verify_token
 from app.models import (
     AgentAction,
     AgentMessage,
@@ -307,6 +307,7 @@ def delete_app_data(
     """
 
     del body  # Pydantic has already enforced the destructive confirmation.
+    reject_demo_user(user_id, "Deleting account data")
 
     encrypted_token = db.execute(
         select(GmailAccount.refresh_token_encrypted).where(

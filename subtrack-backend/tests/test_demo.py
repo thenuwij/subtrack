@@ -19,6 +19,8 @@ from app.config import settings  # noqa: E402
 from app.database import Base  # noqa: E402
 from app.middleware import auth  # noqa: E402
 from app.models import (  # noqa: E402
+    AgentMessage,
+    AgentThread,
     DemoSession,
     DetectedSubscription,
     PaymentReminder,
@@ -26,7 +28,10 @@ from app.models import (  # noqa: E402
     SubscriptionChange,
     UserPreference,
 )
+from app.routers.account import DeleteAppDataRequest, delete_app_data  # noqa: E402
+from app.routers.agent import _enforce_agent_rate_limit  # noqa: E402
 from app.routers.demo import create_demo_session  # noqa: E402
+from app.routers.gmail import gmail_connect, start_scan  # noqa: E402
 
 DEMO_SECRET = "demo-secret-" + "x" * 60
 
@@ -202,6 +207,62 @@ class DemoSessionTests(unittest.TestCase):
             )
         self.assertIsNone(self.db.get(UserPreference, old_user))
         self.assertEqual(self.db.query(DemoSession).count(), 1)
+
+
+class DemoGuardrailTests(unittest.TestCase):
+    def setUp(self):
+        self.engine = create_engine("sqlite+pysqlite:///:memory:")
+        Base.metadata.create_all(self.engine)
+        self.db = sessionmaker(bind=self.engine)()
+
+    def tearDown(self):
+        self.db.close()
+        self.engine.dispose()
+
+    def test_demo_users_cannot_connect_or_scan_gmail(self):
+        for handler in (gmail_connect, start_scan):
+            with self.assertRaises(HTTPException) as caught:
+                handler(user_id="demo_abc", db=self.db)
+            self.assertEqual(caught.exception.status_code, 403)
+            self.assertIn("demo", caught.exception.detail)
+
+    def test_demo_users_cannot_delete_account_data(self):
+        with self.assertRaises(HTTPException) as caught:
+            delete_app_data(
+                DeleteAppDataRequest(confirmation="DELETE MY SUBTRACK DATA"),
+                user_id="demo_abc",
+                db=self.db,
+            )
+        self.assertEqual(caught.exception.status_code, 403)
+
+    def _add_assistant_messages(self, user_id: str, count: int):
+        thread = AgentThread(user_id=user_id, title="Demo", next_message_sequence=count)
+        self.db.add(thread)
+        self.db.flush()
+        hour_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
+        self.db.add_all([
+            AgentMessage(
+                thread_id=thread.id, user_id=user_id, role="assistant",
+                sequence=index, content="Reply", created_at=hour_ago,
+            )
+            for index in range(count)
+        ])
+        self.db.commit()
+
+    def test_demo_assistant_use_is_capped_for_the_whole_session(self):
+        with patch.object(settings, "demo_agent_messages", 5):
+            self._add_assistant_messages("demo_abc", 4)
+            _enforce_agent_rate_limit(self.db, "demo_abc")
+            self._add_assistant_messages("demo_abc", 1)
+            with self.assertRaises(HTTPException) as caught:
+                _enforce_agent_rate_limit(self.db, "demo_abc")
+        self.assertEqual(caught.exception.status_code, 429)
+        self.assertIn("demo", caught.exception.detail)
+
+    def test_real_users_are_not_subject_to_the_demo_cap(self):
+        with patch.object(settings, "demo_agent_messages", 5):
+            self._add_assistant_messages("real-user", 8)
+            _enforce_agent_rate_limit(self.db, "real-user")
 
 
 if __name__ == "__main__":

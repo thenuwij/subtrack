@@ -35,7 +35,7 @@ from app.gmail.crypto import (
 from app.gmail.crypto import (
     check_configured as check_token_encryption_configured,
 )
-from app.middleware.auth import verify_token
+from app.middleware.auth import reject_demo_user, verify_token
 from app.models import (
     BillingCycle,
     DetectedSubscription,
@@ -322,6 +322,7 @@ def gmail_connect(
     db: Session = Depends(get_db),
 ):
     """Create a short-lived, user-bound PKCE flow and return Google's URL."""
+    reject_demo_user(user_id, "Connecting Gmail")
     if not gmail_is_configured():
         raise HTTPException(
             status_code=503,
@@ -400,6 +401,7 @@ def gmail_oauth_complete(
     db: Session = Depends(get_db),
 ):
     """Consume one-time state, exchange with PKCE, then link the mailbox."""
+    reject_demo_user(user_id, "Connecting Gmail")
     if not gmail_is_configured():
         raise HTTPException(
             status_code=503,
@@ -1015,6 +1017,7 @@ def start_scan(
     user_id: str = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
+    reject_demo_user(user_id, "Scanning Gmail")
     if not gmail_is_configured():
         raise HTTPException(
             status_code=503,

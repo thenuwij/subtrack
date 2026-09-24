@@ -192,6 +192,14 @@ def is_demo_user(user_id: str) -> bool:
     return user_id.startswith(DEMO_USER_PREFIX)
 
 
+def reject_demo_user(user_id: str, action: str) -> None:
+    if is_demo_user(user_id):
+        raise HTTPException(
+            status_code=403,
+            detail=f"{action} isn't available in the demo. Create a free account to use it.",
+        )
+
+
 def issue_demo_token(user_id: str, expires_at: datetime) -> str:
     if not settings.demo_token_secret or not is_demo_user(user_id):
         raise ValueError("Demo tokens are not available")

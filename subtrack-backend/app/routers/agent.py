@@ -22,7 +22,7 @@ from app.agent.actions import (
 from app.agent.tools import TOOL_DEFINITIONS, run_tool
 from app.config import settings
 from app.database import get_db
-from app.middleware.auth import verify_token
+from app.middleware.auth import is_demo_user, verify_token
 from app.models import AgentAction, AgentMessage, AgentThread, Category
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -530,6 +530,19 @@ def _enforce_agent_rate_limit(db: Session, user_id: str) -> None:
         AgentMessage.role == "assistant",
         AgentMessage.created_at >= _utcnow() - timedelta(minutes=1),
     ).scalar() or 0
+    if is_demo_user(user_id):
+        demo_attempts = db.query(func.count(AgentMessage.id)).filter(
+            AgentMessage.user_id == user_id,
+            AgentMessage.role == "assistant",
+        ).scalar() or 0
+        if demo_attempts >= settings.demo_agent_messages:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    "You've reached the assistant limit for this demo. "
+                    "Create a free account to keep chatting."
+                ),
+            )
     if recent_attempts >= AGENT_ATTEMPTS_PER_MINUTE:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
