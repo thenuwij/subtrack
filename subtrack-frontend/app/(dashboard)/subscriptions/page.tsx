@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useMemo, useRef } from 'react'
-import { createClient } from '@/lib/supabase/client'
 import { apiKeys, errorMessage, useApi } from '@/lib/hooks/useApi'
 import {
   createSubscription,
@@ -43,6 +42,7 @@ import {
   storedDateKey,
   todayUtcDateKey,
 } from '@/lib/utils/dates'
+import { getAccessToken } from '@/lib/auth/session'
 
 function inPeriod(dateStr: string | null, period: 'all' | 'day' | 'week' | 'month'): boolean {
   if (period === 'all') return true
@@ -105,16 +105,15 @@ export default function SubscriptionsPage() {
   async function handleMerge(pair: DuplicatePair) {
     if (merging || dismissingDuplicate || duplicateOperationRef.current) return
     duplicateOperationRef.current = true
-    const supabase = createClient()
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) {
+    const accessToken = await getAccessToken()
+    if (!accessToken) {
       duplicateOperationRef.current = false
       toast.error('Your session has expired.')
       return
     }
     setMerging(pair.merge.id)
     try {
-      await mergeSubscription(session.access_token, pair.merge.id, pair.keep.id)
+      await mergeSubscription(accessToken, pair.merge.id, pair.keep.id)
       void duplicatesQuery.mutate(
         prev => prev?.filter(p => p.merge.id !== pair.merge.id),
         { revalidate: false },
@@ -136,8 +135,8 @@ export default function SubscriptionsPage() {
   async function handleDismissDuplicate(pair: DuplicatePair) {
     if (merging || dismissingDuplicate || duplicateOperationRef.current) return
     duplicateOperationRef.current = true
-    const { data: { session } } = await createClient().auth.getSession()
-    if (!session) {
+    const accessToken = await getAccessToken()
+    if (!accessToken) {
       toast.error('Your session has expired.')
       duplicateOperationRef.current = false
       return
@@ -146,7 +145,7 @@ export default function SubscriptionsPage() {
     setDismissingDuplicate(key)
     try {
       await dismissDuplicateSuggestion(
-        session.access_token,
+        accessToken,
         pair.keep.id,
         pair.merge.id,
       )
@@ -170,10 +169,9 @@ export default function SubscriptionsPage() {
   // ── add ────────────────────────────────────────────────────────────────────
 
   async function handleAdd(formData: SubscriptionInput) {
-    const supabase = createClient()
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) throw new Error('Not authenticated')
-    const created = await createSubscription(session.access_token, formData)
+    const accessToken = await getAccessToken()
+    if (!accessToken) throw new Error('Not authenticated')
+    const created = await createSubscription(accessToken, formData)
     void subscriptionsQuery.mutate(prev => [created, ...(prev ?? [])], { revalidate: false })
     void duplicatesQuery.mutate([], { revalidate: true })
     toast.success('Payment added')
@@ -182,10 +180,9 @@ export default function SubscriptionsPage() {
   // ── update ─────────────────────────────────────────────────────────────────
 
   async function handleEdit(formData: SubscriptionInput) {
-    const supabase = createClient()
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session || !editingSubscription) throw new Error('Not authenticated')
-    const updated = await updateSubscription(session.access_token, editingSubscription.id, formData)
+    const accessToken = await getAccessToken()
+    if (!accessToken || !editingSubscription) throw new Error('Not authenticated')
+    const updated = await updateSubscription(accessToken, editingSubscription.id, formData)
     void subscriptionsQuery.mutate(
       prev => prev?.map(s => s.id === editingSubscription.id ? updated : s),
       { revalidate: false },
@@ -198,10 +195,9 @@ export default function SubscriptionsPage() {
   // ── delete ─────────────────────────────────────────────────────────────────
 
   async function handleDelete(id: string) {
-    const supabase = createClient()
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) throw new Error('Not authenticated')
-    await deleteSubscription(session.access_token, id)
+    const accessToken = await getAccessToken()
+    if (!accessToken) throw new Error('Not authenticated')
+    await deleteSubscription(accessToken, id)
     void subscriptionsQuery.mutate(prev => prev?.filter(s => s.id !== id), { revalidate: false })
     void duplicatesQuery.mutate(
       current => current?.filter(pair => pair.keep.id !== id && pair.merge.id !== id),

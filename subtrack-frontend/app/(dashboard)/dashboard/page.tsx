@@ -12,7 +12,6 @@ import {
   Minus,
   Sparkles,
 } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 import {
   dismissReminder,
   getDetected,
@@ -51,6 +50,7 @@ import { UpcomingCharges } from '@/components/dashboard/UpcomingCharges'
 import { NeedsAttention } from '@/components/dashboard/NeedsAttention'
 import { GettingStarted } from '@/components/onboarding/GettingStarted'
 import { apiKeys, errorMessage, useApi } from '@/lib/hooks/useApi'
+import { getAccessToken } from '@/lib/auth/session'
 
 function formatDate(date: string) {
   return new Date(date).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
@@ -195,10 +195,10 @@ export default function DashboardPage() {
   }, [ranked, monthlyTotal])
 
   async function handleDismissReminder(id: string) {
-    const { data: { session } } = await createClient().auth.getSession()
-    if (!session) throw new Error('Your session has expired.')
+    const accessToken = await getAccessToken()
+    if (!accessToken) throw new Error('Your session has expired.')
     try {
-      await dismissReminder(session.access_token, id)
+      await dismissReminder(accessToken, id)
       void remindersQuery.mutate(
         current => current?.filter(reminder => reminder.id !== id),
         { revalidate: false },
