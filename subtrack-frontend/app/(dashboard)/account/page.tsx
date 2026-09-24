@@ -17,7 +17,6 @@ import {
   updatePreferences,
 } from '@/lib/api'
 import type { GmailStatus } from '@/types'
-import type { User } from '@supabase/supabase-js'
 import type { Currency } from '@/types'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/layout/ThemeToggle'
@@ -33,7 +32,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { getAccessToken, useIsDemo } from '@/lib/auth/session'
+import { getAccessToken, signOut } from '@/lib/auth/session'
+import { useCurrentUser } from '@/lib/hooks/useCurrentUser'
+import { UserAvatar } from '@/components/layout/UserAvatar'
+import { LogOut } from 'lucide-react'
 
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
 /** Keyed by the code the Gmail callback forwards: Google's own OAuth error,
@@ -59,8 +61,6 @@ const DELETE_CONFIRMATION = 'DELETE MY SUBTRACK DATA' as const
 
 export default function AccountPage() {
   const router = useRouter()
-  const [user, setUser] = useState<User | null>(null)
-  const [imgError, setImgError] = useState(false)
   const [income, setIncome] = useState('')
   const [incomeStatus, setIncomeStatus] = useState<'idle' | 'saving' | 'saved' | 'cleared' | 'error'>('idle')
   const [incomeError, setIncomeError] = useState('')
@@ -82,13 +82,10 @@ export default function AccountPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [deleteBusy, setDeleteBusy] = useState(false)
-  const isDemo = useIsDemo()
+  const currentUser = useCurrentUser()
   const { baseCurrency, setBaseCurrency, isLoading, isUpdating: currencyUpdating } = useCurrency()
 
   useEffect(() => {
-    const supabase = createClient()
-    supabase.auth.getUser().then(({ data }) => setUser(data.user))
-
     async function loadIncome() {
       const accessToken = await getAccessToken()
       if (!accessToken) return
@@ -264,7 +261,7 @@ export default function AccountPage() {
   }
 
   async function handleSignOut() {
-    await createClient().auth.signOut()
+    await signOut()
     router.push('/login')
   }
 
@@ -324,125 +321,72 @@ export default function AccountPage() {
     }
   }
 
-  const meta       = user?.user_metadata ?? {}
-  const avatarUrl  = meta.avatar_url as string | undefined
-  const fullName   = (meta.full_name ?? meta.name ?? (isDemo ? 'Demo user' : '')) as string
-  const email      = user?.email ?? (isDemo ? 'Sample data, reset after 24 hours' : '')
-  const initials   = fullName
-    .split(' ')
-    .map((n: string) => n[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2)
-  const memberSince = user?.created_at
-    ? new Date(user.created_at).toLocaleDateString('en-AU', { month: 'long', year: 'numeric' })
-    : ''
-
   return (
-    <div className="mx-auto w-full max-w-2xl px-4 py-8 space-y-6">
-
+    <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-8">
       <h1 className="text-2xl font-semibold tracking-tight">Account</h1>
 
-      {/* Section 1 — Profile */}
-      <div className="rounded-2xl bg-card shadow-sm p-6 space-y-4">
-        <h2 className="text-lg font-semibold">Profile</h2>
-
-        <div className="flex items-center gap-4">
-          {/* Avatar */}
-          {avatarUrl && !imgError ? (
-            /* External Google avatar; next/image would need a remote-host
-               allowlist for a 56px image with no optimization benefit. */
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={avatarUrl}
-              alt={fullName}
-              onError={() => setImgError(true)}
-              className="w-14 h-14 rounded-full object-cover shrink-0"
-            />
-          ) : (
-            <div className="w-14 h-14 rounded-full bg-muted flex items-center justify-center shrink-0">
-              <span className="text-base font-semibold text-muted-foreground">{initials || '?'}</span>
-            </div>
-          )}
-
-          <div className="min-w-0">
-            <p className="font-semibold text-sm truncate">{fullName || '—'}</p>
-            <p className="text-sm text-muted-foreground truncate">{email}</p>
+      <section className="flex flex-col gap-5 rounded-2xl bg-card p-6 shadow-sm sm:flex-row sm:items-center">
+        <UserAvatar
+          name={currentUser.name}
+          email={currentUser.email}
+          avatarUrl={currentUser.avatarUrl}
+          className="h-16 w-16 text-lg"
+        />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-lg font-semibold text-foreground">
+            {currentUser.name || currentUser.email || 'Your account'}
+          </p>
+          {currentUser.name && currentUser.email ? (
+            <p className="truncate text-sm text-muted-foreground">{currentUser.email}</p>
+          ) : null}
+          <div className="mt-2 flex flex-wrap gap-2 text-xs">
+            {currentUser.signInMethod ? (
+              <span className="rounded-full bg-muted px-2.5 py-1 font-medium text-foreground">
+                {currentUser.isDemo ? 'Demo session' : `Signed in with ${currentUser.signInMethod}`}
+              </span>
+            ) : null}
+            {currentUser.memberSince && !currentUser.isDemo ? (
+              <span className="rounded-full bg-muted px-2.5 py-1 text-muted-foreground">
+                Member since {currentUser.memberSince}
+              </span>
+            ) : null}
           </div>
         </div>
+        <Button variant="outline" onClick={handleSignOut} className="h-9 shrink-0 gap-2 px-4">
+          <LogOut aria-hidden="true" />
+          Sign out
+        </Button>
+      </section>
 
-        <div className="border-t border-border pt-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Sign-in method</span>
-            <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-muted text-foreground">
-              Signed in with Google
-            </span>
-          </div>
-          {memberSince && (
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Member since</span>
-              <span className="text-sm text-foreground">{memberSince}</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Section 2 — Preferences */}
-      <div className="rounded-2xl bg-card shadow-sm p-6 space-y-4">
-        <h2 className="text-lg font-semibold">Preferences</h2>
-
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium">Appearance</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              System follows your device setting
-            </p>
-          </div>
+      <Section title="Preferences">
+        <Row title="Appearance" description="System follows your device setting">
           <ThemeToggle />
-        </div>
+        </Row>
 
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium">Guided tour</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              A quick walkthrough of where everything lives
-            </p>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => window.dispatchEvent(new Event(START_TOUR_EVENT))}
-          >
-            Replay tour
-          </Button>
-        </div>
-
-        <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
-          <div>
-            <p className="text-sm font-medium">Base currency</p>
-            <p className="text-xs text-muted-foreground mt-0.5">All amounts are displayed in this currency</p>
-          </div>
+        <Row title="Base currency" description="All amounts are displayed in this currency">
           <select
             value={baseCurrency}
             disabled={isLoading || currencyUpdating}
             onChange={event => void handleCurrencyChange(event.target.value as Currency)}
             aria-label="Base currency"
-            className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 transition-shadow shrink-0"
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground transition-shadow focus:outline-none focus:ring-2 focus:ring-primary/40"
           >
             {CURRENCIES.map(c => (
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
-        </div>
+        </Row>
 
-        <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
-          <div>
-            <p className="text-sm font-medium">Monthly income</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Used to show what share of your income goes to recurring payments
-            </p>
-          </div>
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+        <Row
+          title="Monthly income"
+          description="Used to show what share of your income goes to recurring payments"
+          note={incomeStatus === 'cleared' ? (
+            <p role="status" className="mt-1.5 text-xs text-muted-foreground">Monthly income removed.</p>
+          ) : incomeStatus === 'error' ? (
+            <p role="alert" className="mt-1.5 text-xs text-destructive">{incomeError || 'Could not update your income.'}</p>
+          ) : null}
+        >
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <input
               type="number"
               min="0"
@@ -456,7 +400,7 @@ export default function AccountPage() {
                 setIncomeError('')
               }}
               aria-label={`Monthly income in ${baseCurrency}`}
-              className="w-32 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 transition-shadow"
+              className="w-32 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground transition-shadow focus:outline-none focus:ring-2 focus:ring-primary/40"
             />
             <Button
               type="button"
@@ -477,18 +421,9 @@ export default function AccountPage() {
               </Button>
             ) : null}
           </div>
-        </div>
+        </Row>
+      </Section>
 
-        {incomeStatus === 'cleared' ? (
-          <p role="status" className="text-xs text-muted-foreground">Monthly income removed.</p>
-        ) : null}
-
-        {incomeStatus === 'error' && (
-          <p role="alert" className="text-xs text-destructive">{incomeError || 'Could not update your income.'}</p>
-        )}
-      </div>
-
-      {/* Section 3 — Connected inbox */}
       {gmail && (
         <div id="inbox" className="scroll-mt-6 rounded-2xl bg-card shadow-sm p-6 space-y-4">
           <div>
@@ -615,51 +550,39 @@ export default function AccountPage() {
         </div>
       )}
 
-      <div className="rounded-2xl bg-card shadow-sm p-6 space-y-4">
-        <h2 className="text-lg font-semibold">Your data</h2>
+      <Section title="Help">
+        <Row title="Guided tour" description="A quick walkthrough of where everything lives">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => window.dispatchEvent(new Event(START_TOUR_EVENT))}
+          >
+            Replay tour
+          </Button>
+        </Row>
+      </Section>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-medium">Download your data</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Export payments, reminders, review findings, preferences, and assistant history as JSON. Secret tokens are excluded.
-            </p>
-          </div>
-          <Button variant="outline" onClick={handleExport} disabled={exportBusy} className="shrink-0">
+      <Section title="Your data">
+        <Row
+          title="Download your data"
+          description="Export payments, reminders, review findings, preferences, and assistant history as JSON. Secret tokens are excluded."
+        >
+          <Button variant="outline" onClick={handleExport} disabled={exportBusy}>
             {exportBusy ? 'Preparing…' : 'Download export'}
           </Button>
-        </div>
+        </Row>
+      </Section>
 
-        <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-medium">Delete Subtrack app data</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Permanently deletes your Subtrack records and disconnects Gmail. Your external Supabase sign-in identity remains.
-            </p>
-          </div>
-          <Button
-            variant="destructive"
-            onClick={() => setDeleteDialogOpen(true)}
-            className="shrink-0"
-          >
+      <Section title="Danger zone" tone="danger">
+        <Row
+          title="Delete Subtrack app data"
+          description="Permanently deletes your Subtrack records and disconnects Gmail. Your sign-in account itself remains."
+        >
+          <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)}>
             Delete app data
           </Button>
-        </div>
-      </div>
-
-      <div className="rounded-2xl bg-card shadow-sm p-6 space-y-4">
-        <h2 className="text-lg font-semibold">Account</h2>
-
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-medium">Sign out</p>
-            <p className="text-xs text-muted-foreground mt-0.5">You will be redirected to the login page</p>
-          </div>
-          <Button variant="outline" className="text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive shrink-0" onClick={handleSignOut}>
-            Sign out
-          </Button>
-        </div>
-      </div>
+        </Row>
+      </Section>
 
       <Dialog
         open={deleteDialogOpen}
@@ -708,6 +631,54 @@ export default function AccountPage() {
         </DialogContent>
       </Dialog>
 
+    </div>
+  )
+}
+
+function Section({
+  title,
+  tone,
+  children,
+}: {
+  title: string
+  tone?: 'danger'
+  children: React.ReactNode
+}) {
+  return (
+    <section
+      className={
+        tone === 'danger'
+          ? 'rounded-2xl border border-destructive/30 bg-card p-6 shadow-sm'
+          : 'rounded-2xl bg-card p-6 shadow-sm'
+      }
+    >
+      <h2 className={tone === 'danger' ? 'text-lg font-semibold text-destructive' : 'text-lg font-semibold'}>
+        {title}
+      </h2>
+      <div className="mt-2 divide-y divide-border">{children}</div>
+    </section>
+  )
+}
+
+function Row({
+  title,
+  description,
+  note,
+  children,
+}: {
+  title: string
+  description: string
+  note?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex flex-col gap-3 py-4 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+        {note}
+      </div>
+      <div className="shrink-0">{children}</div>
     </div>
   )
 }
