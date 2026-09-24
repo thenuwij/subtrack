@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { MessageCircle, X } from 'lucide-react'
 import { AgentWorkspace } from '@/components/agent/AgentWorkspace'
@@ -21,6 +21,8 @@ export function AgentChat() {
   const router = useRouter()
   const rememberPageContext = useRememberAgentPageContext()
   const [open, setOpen] = useState(false)
+  const launcherRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLElement>(null)
   const [hasOpened, setHasOpened] = useState(false)
   const [draftRequest, setDraftRequest] = useState<{ id: number; text: string } | null>(null)
   const [storedWidth, setStoredWidth] = useStoredString(WIDTH_KEY, String(DEFAULT_WIDTH))
@@ -38,6 +40,24 @@ export function AgentChat() {
     window.addEventListener('subtrack:ask-agent', openWithDraft)
     return () => window.removeEventListener('subtrack:ask-agent', openWithDraft)
   }, [])
+
+  function focusComposer() {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => panelRef.current?.querySelector('textarea')?.focus())
+    })
+  }
+
+  function closePanel() {
+    setOpen(false)
+    launcherRef.current?.focus()
+  }
+
+  function panelKey(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === 'Escape' && !event.defaultPrevented) {
+      event.preventDefault()
+      closePanel()
+    }
+  }
 
   function resizeStart(event: PointerEvent<HTMLDivElement>) {
     event.preventDefault()
@@ -79,9 +99,15 @@ export function AgentChat() {
       <button
         type="button"
         data-tour="assistant"
+        ref={launcherRef}
         onClick={() => {
-          if (!open) setHasOpened(true)
-          setOpen(value => !value)
+          if (open) {
+            setOpen(false)
+            return
+          }
+          setHasOpened(true)
+          setOpen(true)
+          focusComposer()
         }}
         aria-label={open ? 'Minimise financial assistant' : 'Open financial assistant'}
         aria-expanded={open}
@@ -91,6 +117,8 @@ export function AgentChat() {
       </button>
 
       <section
+        ref={panelRef}
+        onKeyDown={panelKey}
         aria-label="Subtrack financial assistant"
         style={panelStyle}
         className={`${open ? 'flex' : 'hidden'} fixed inset-0 z-50 flex-col overflow-hidden bg-card sm:inset-auto sm:bottom-6 sm:right-6 sm:h-[min(720px,calc(100vh-3rem))] sm:w-[var(--agent-panel-width)] sm:rounded-2xl sm:border sm:border-border sm:shadow-xl`}
@@ -111,7 +139,7 @@ export function AgentChat() {
           <AgentWorkspace
             variant="panel"
             draftRequest={draftRequest}
-            onClose={() => setOpen(false)}
+            onClose={closePanel}
             onOpenFullPage={() => {
               rememberPageContext()
               setOpen(false)
