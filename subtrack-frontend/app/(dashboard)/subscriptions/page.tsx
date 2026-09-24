@@ -1,7 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { apiKeys, errorMessage, useApi } from '@/lib/hooks/useApi'
 import {
   createSubscription,
   deleteSubscription,
@@ -62,23 +63,31 @@ function inPeriod(dateStr: string | null, period: 'all' | 'day' | 'week' | 'mont
 }
 
 export default function SubscriptionsPage() {
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
+  const subscriptionsQuery = useApi<Subscription[]>(
+    apiKeys.subscriptions('all'),
+    token => getSubscriptions(token, { includeInactive: true }),
+    { onError: () => { toast.error('Something went wrong') } },
+  )
   // Two rows for one service double-counts the cost, and detection can easily
   // produce "Claude" and "Anthropic (Claude)" separately.
-  const [duplicates, setDuplicates] = useState<DuplicatePair[]>([])
-  const [duplicateError, setDuplicateError] = useState('')
-  const [duplicateChecking, setDuplicateChecking] = useState(false)
+  const duplicatesQuery = useApi<DuplicatePair[]>(apiKeys.duplicates, getDuplicates)
+  const subscriptions = useMemo(() => subscriptionsQuery.data ?? [], [subscriptionsQuery.data])
+  const duplicates = duplicatesQuery.data ?? []
+  const duplicateError = duplicatesQuery.error
+    ? 'Could not check for possible duplicates. Your payments and totals are still available.'
+    : ''
+  const duplicateChecking = duplicatesQuery.isValidating
+  const loading = subscriptionsQuery.isLoading
+  const error = subscriptionsQuery.isValidating
+    ? null
+    : errorMessage(subscriptionsQuery.error, 'Failed to load recurring payments.') || null
   const [merging, setMerging] = useState<string | null>(null)
   const [dismissingDuplicate, setDismissingDuplicate] = useState<string | null>(null)
-  const [loading, setLoading]             = useState(true)
-  const [error, setError]                 = useState<string | null>(null)
   const [modalOpen, setModalOpen]         = useState(false)
   const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null)
   const [reminderSubscription, setReminderSubscription] = useState<Subscription | null>(null)
   const [assistantSubscription, setAssistantSubscription] = useState<Subscription | null>(null)
   const { baseCurrency, canConvert, convertAmount, ratesLoading, ratesStale } = useCurrency()
-  const duplicateRequestRef = useRef(0)
-  const subscriptionRequestRef = useRef(0)
   const duplicateOperationRef = useRef(false)
 
   // filter / sort / group state
@@ -93,56 +102,6 @@ export default function SubscriptionsPage() {
 
   // ── fetch ──────────────────────────────────────────────────────────────────
 
-  const refreshDuplicates = useCallback(async (accessToken: string, clear = false) => {
-    const requestId = ++duplicateRequestRef.current
-    if (clear) setDuplicates([])
-    setDuplicateError('')
-    setDuplicateChecking(true)
-    try {
-      const result = await getDuplicates(accessToken)
-      if (requestId !== duplicateRequestRef.current) return
-      setDuplicates(result)
-    } catch {
-      if (requestId !== duplicateRequestRef.current) return
-      setDuplicateError('Could not check for possible duplicates. Your payments and totals are still available.')
-    } finally {
-      if (requestId === duplicateRequestRef.current) setDuplicateChecking(false)
-    }
-  }, [])
-
-  const fetchSubscriptions = useCallback(async () => {
-    const requestId = ++subscriptionRequestRef.current
-    const supabase = createClient()
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session || requestId !== subscriptionRequestRef.current) {
-      if (requestId === subscriptionRequestRef.current) {
-        setError('Your session has expired. Sign in again to load recurring payments.')
-        setLoading(false)
-      }
-      return
-    }
-    try {
-      const data = await getSubscriptions(session.access_token, { includeInactive: true })
-      if (requestId !== subscriptionRequestRef.current) return
-      setSubscriptions(data)
-      setError(null)
-      void refreshDuplicates(session.access_token)
-    } catch (e) {
-      if (requestId !== subscriptionRequestRef.current) return
-      setError(e instanceof Error ? e.message : 'Failed to load recurring payments.')
-      toast.error('Something went wrong')
-    } finally {
-      if (requestId === subscriptionRequestRef.current) setLoading(false)
-    }
-  }, [refreshDuplicates])
-
-  useEffect(() => {
-    void fetchSubscriptions()
-    const refresh = () => { void fetchSubscriptions() }
-    window.addEventListener('subtrack:data-changed', refresh)
-    return () => window.removeEventListener('subtrack:data-changed', refresh)
-  }, [fetchSubscriptions])
-
   async function handleMerge(pair: DuplicatePair) {
     if (merging || dismissingDuplicate || duplicateOperationRef.current) return
     duplicateOperationRef.current = true
@@ -156,11 +115,12 @@ export default function SubscriptionsPage() {
     setMerging(pair.merge.id)
     try {
       await mergeSubscription(session.access_token, pair.merge.id, pair.keep.id)
-      duplicateRequestRef.current += 1
-      setDuplicateChecking(false)
-      setDuplicates(prev => prev.filter(p => p.merge.id !== pair.merge.id))
+      void duplicatesQuery.mutate(
+        prev => prev?.filter(p => p.merge.id !== pair.merge.id),
+        { revalidate: false },
+      )
       toast.success(`Merged into ${pair.keep.name}`)
-      await fetchSubscriptions()
+      await Promise.all([subscriptionsQuery.mutate(), duplicatesQuery.mutate()])
     } catch {
       toast.error('Could not merge')
     } finally {
@@ -190,10 +150,10 @@ export default function SubscriptionsPage() {
         pair.keep.id,
         pair.merge.id,
       )
-      duplicateRequestRef.current += 1
-      setDuplicateChecking(false)
-      setDuplicateError('')
-      setDuplicates(current => current.filter(item => duplicatePairKey(item) !== key))
+      void duplicatesQuery.mutate(
+        current => current?.filter(item => duplicatePairKey(item) !== key),
+        { revalidate: false },
+      )
       toast.success('These payments will stay separate')
     } catch (caught) {
       toast.error(caught instanceof Error ? caught.message : 'Could not save this decision.')
@@ -204,12 +164,7 @@ export default function SubscriptionsPage() {
   }
 
   async function retryDuplicateCheck() {
-    const { data: { session } } = await createClient().auth.getSession()
-    if (!session) {
-      toast.error('Your session has expired.')
-      return
-    }
-    await refreshDuplicates(session.access_token)
+    await duplicatesQuery.mutate()
   }
 
   // ── add ────────────────────────────────────────────────────────────────────
@@ -219,8 +174,8 @@ export default function SubscriptionsPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
     const created = await createSubscription(session.access_token, formData)
-    setSubscriptions(prev => [created, ...prev])
-    void refreshDuplicates(session.access_token, true)
+    void subscriptionsQuery.mutate(prev => [created, ...(prev ?? [])], { revalidate: false })
+    void duplicatesQuery.mutate([], { revalidate: true })
     toast.success('Payment added')
   }
 
@@ -231,8 +186,11 @@ export default function SubscriptionsPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session || !editingSubscription) throw new Error('Not authenticated')
     const updated = await updateSubscription(session.access_token, editingSubscription.id, formData)
-    setSubscriptions(prev => prev.map(s => s.id === editingSubscription.id ? updated : s))
-    void refreshDuplicates(session.access_token, true)
+    void subscriptionsQuery.mutate(
+      prev => prev?.map(s => s.id === editingSubscription.id ? updated : s),
+      { revalidate: false },
+    )
+    void duplicatesQuery.mutate([], { revalidate: true })
     setEditingSubscription(null)
     toast.success('Payment updated')
   }
@@ -244,11 +202,11 @@ export default function SubscriptionsPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
     await deleteSubscription(session.access_token, id)
-    setSubscriptions(prev => prev.filter(s => s.id !== id))
-    setDuplicates(current => current.filter(
-      pair => pair.keep.id !== id && pair.merge.id !== id,
-    ))
-    void refreshDuplicates(session.access_token)
+    void subscriptionsQuery.mutate(prev => prev?.filter(s => s.id !== id), { revalidate: false })
+    void duplicatesQuery.mutate(
+      current => current?.filter(pair => pair.keep.id !== id && pair.merge.id !== id),
+      { revalidate: true },
+    )
     toast.success('Payment deleted')
   }
 
@@ -538,7 +496,7 @@ export default function SubscriptionsPage() {
           <p className="text-sm text-destructive">{error}</p>
           <button
             className="text-xs text-destructive underline underline-offset-2 mt-1"
-            onClick={() => { setError(null); setLoading(true); fetchSubscriptions() }}
+            onClick={() => { void subscriptionsQuery.mutate() }}
           >
             Try again
           </button>

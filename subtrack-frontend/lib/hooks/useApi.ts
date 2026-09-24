@@ -11,6 +11,7 @@ export const apiKeys = {
   forecast: (days: number) => `forecast:${days}`,
   reminders: (horizonDays: number) => `reminders:${horizonDays}`,
   preferences: 'preferences',
+  duplicates: 'duplicates',
 } as const
 
 export function errorMessage(error: unknown, fallback: string) {
