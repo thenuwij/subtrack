@@ -4,6 +4,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { AgentChat } from '@/components/agent/AgentChat'
 import { AgentPageContextProvider } from '@/lib/agent/page-context'
 import { ApiCacheProvider } from '@/components/providers/ApiCacheProvider'
+import { OnboardingTour } from '@/components/onboarding/OnboardingTour'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -16,6 +17,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             {children}
           </main>
           <AgentChat />
+          <OnboardingTour />
         </div>
       </AgentPageContextProvider>
       </ApiCacheProvider>

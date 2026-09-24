@@ -184,6 +184,7 @@ export interface Preferences {
   base_currency: Currency
   monthly_income: number | null  // null until the user states it
   timezone: string
+  onboarding_completed?: boolean
   income_converted?: boolean
   income_conversion_rate_as_of?: string | null
 }
