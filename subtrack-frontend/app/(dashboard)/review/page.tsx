@@ -417,13 +417,11 @@ export default function ReviewPage() {
 
         <section className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="space-y-2">
-            <p className="text-sm font-medium text-primary">From your inbox</p>
-            <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-              Review detections
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+              Inbox
             </h1>
             <p className="max-w-2xl text-sm text-muted-foreground">
-              Found in your email receipts. Nothing is added to your recurring payments
-              until you approve it.
+              Payments found in your email. Nothing is added until you approve it.
             </p>
           </div>
 
@@ -853,9 +851,6 @@ export default function ReviewPage() {
                                 {item.amount_type === 'variable' ? 'Varies each bill' : 'Usually fixed'}
                               </p>
                             )}
-                            <p className="text-xs leading-5 text-muted-foreground">
-                              Variable bills appear as estimates in dashboard totals.
-                            </p>
                           </div>
                         </div>
                       ) : null}

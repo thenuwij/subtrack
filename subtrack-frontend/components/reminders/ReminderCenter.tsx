@@ -64,9 +64,6 @@ export function ReminderCenter({ reminders, onDismiss }: ReminderCenterProps) {
               Upcoming reminders
             </h2>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Renewal and trial dates you asked Subtrack to keep visible.
-          </p>
         </div>
         <Link href="/subscriptions" className="text-xs font-medium text-primary hover:underline">
           Manage

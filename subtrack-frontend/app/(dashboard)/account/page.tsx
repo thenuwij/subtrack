@@ -364,11 +364,11 @@ export default function AccountPage() {
       </section>
 
       <Section title="Preferences">
-        <Row title="Appearance" description="System follows your device setting">
+        <Row title="Appearance">
           <ThemeToggle />
         </Row>
 
-        <Row title="Base currency" description="All amounts are displayed in this currency">
+        <Row title="Base currency">
           <select
             value={baseCurrency}
             disabled={isLoading || currencyUpdating}
@@ -433,9 +433,6 @@ export default function AccountPage() {
         <div id="inbox" className="scroll-mt-6 rounded-2xl bg-card shadow-sm p-6 space-y-4">
           <div>
             <h2 className="text-lg font-semibold">Email connection</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Let Subtrack find recurring payments in Gmail receipts for you to review.
-            </p>
           </div>
 
           {currentUser.isDemo ? (
@@ -534,8 +531,7 @@ export default function AccountPage() {
                 <div>
                   <p className="text-sm font-medium">Connect Gmail</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Find recurring payments from your receipt emails instead of adding them
-                    by hand. Read-only, and nothing is added without your approval.
+                    Read-only. Nothing is added without your approval.
                   </p>
                   {/* Google renders read access to Gmail as its own tickbox and
                       leaves it unticked. Continuing past it returns a valid
@@ -568,7 +564,7 @@ export default function AccountPage() {
       )}
 
       <Section title="Help">
-        <Row title="Guided tour" description="A quick walkthrough of where everything lives">
+        <Row title="Guided tour">
           <Button
             variant="outline"
             size="sm"
@@ -582,7 +578,7 @@ export default function AccountPage() {
       <Section title="Your data">
         <Row
           title="Download your data"
-          description="Export payments, reminders, review findings, preferences, and assistant history as JSON. Secret tokens are excluded."
+          description="A JSON file of everything Subtrack stores about you."
         >
           <Button variant="outline" onClick={handleExport} disabled={exportBusy}>
             {exportBusy ? 'Preparing…' : 'Download export'}
@@ -690,7 +686,7 @@ function Row({
   children,
 }: {
   title: string
-  description: string
+  description?: string
   note?: React.ReactNode
   children: React.ReactNode
 }) {
@@ -698,7 +694,7 @@ function Row({
     <div className="flex flex-col gap-3 py-4 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <p className="text-sm font-medium">{title}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+        {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
         {note}
       </div>
       <div className="shrink-0">{children}</div>

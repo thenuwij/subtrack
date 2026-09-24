@@ -444,9 +444,6 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
                       <SelectItem value="variable">Varies each bill</SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs leading-5 text-muted-foreground">
-                    Variable amounts are treated as estimates in totals.
-                  </p>
                 </div>
                 <div className="grid gap-1.5">
                   <Label htmlFor="sub-spending-type">Spending type</Label>
@@ -640,7 +637,7 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
               <span>
                 <span className="block text-sm font-medium text-foreground">This is a free trial</span>
                 <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">
-                  The amount above is the price after the trial. Subtrack creates a dashboard reminder seven days before it ends.
+                  Enter the price after the trial. You get a reminder 7 days before it ends.
                 </span>
               </span>
             </label>
@@ -682,9 +679,6 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
                       <SelectItem value="ended">Ended</SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs leading-5 text-muted-foreground">
-                    Paused and finished payments stay in history without inflating current totals.
-                  </p>
                 </div>
 
                 {form.status === 'paused' ? (
@@ -704,7 +698,6 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
                 <div className="grid gap-1.5">
                   <Label htmlFor="sub-recurs-until">Stop recurring after <span className="font-normal text-muted-foreground">(optional)</span></Label>
                   <Input id="sub-recurs-until" type="date" value={form.recurrence_end_at} onChange={event => set('recurrence_end_at', event.target.value)} disabled={loading} />
-                  <p className="text-xs leading-5 text-muted-foreground">Useful for instalments or contracts with a known final date.</p>
                 </div>
               </div>
             ) : initialData && initialData.status !== 'active' ? (

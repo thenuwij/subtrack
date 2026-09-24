@@ -75,7 +75,7 @@ export default function DashboardPage() {
     apiKeys.reminders(90), token => getReminders(token, { horizonDays: 90 }),
   )
   const forecastQuery = useApi<SubscriptionForecast>(
-    apiKeys.forecast(30), token => getSubscriptionForecast(token, 30),
+    apiKeys.forecast(14), token => getSubscriptionForecast(token, 14),
   )
   const detectionsQuery = useApi<DetectedSubscription[]>(
     apiKeys.detected('pending'), token => getDetected(token, 'pending'),
@@ -463,7 +463,7 @@ export default function DashboardPage() {
             <div>
               <h2 className="text-base font-semibold text-foreground">What changed</h2>
               <p className="mt-0.5 text-sm text-muted-foreground">
-                Additions, price changes, and payments removed in the last 30 days.
+                Last 30 days
               </p>
             </div>
             {convertibleChanges.length > 0 && netChange !== 0 && (
@@ -578,7 +578,7 @@ export default function DashboardPage() {
           )}
           {!ratesLoading && changes.some(change => change.currency !== baseCurrency) ? (
             <p className="mt-3 text-xs leading-5 text-muted-foreground">
-              Foreign-currency changes are re-expressed using the currently loaded FX snapshot, so the displayed base-currency net can move with rates. Recorded native amounts do not change.
+              Foreign amounts use today&apos;s exchange rates.
             </p>
           ) : null}
         </section>

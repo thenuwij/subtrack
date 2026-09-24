@@ -39,9 +39,6 @@ export function NeedsAttention({ detections, forecast, gmail, gmailScanStale }: 
   return (
     <section className="rounded-2xl bg-card p-5 shadow-sm" aria-labelledby="needs-attention-heading">
       <h2 id="needs-attention-heading" className="text-sm font-semibold text-foreground">Needs attention</h2>
-      <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-        A few details would make your reminders and projections more complete.
-      </p>
       <ul className="mt-3 space-y-2 text-sm">
         {uncertainDetections > 0 ? (
           <li className="flex items-start justify-between gap-4">

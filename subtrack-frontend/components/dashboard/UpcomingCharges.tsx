@@ -31,7 +31,7 @@ export function UpcomingCharges({ forecast, error, retrying, onRetry }: Props) {
       <section className="flex flex-col gap-3 rounded-2xl bg-card p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold text-foreground">Upcoming charges</h2>
-          <p className="mt-1 text-sm text-muted-foreground">We couldn&apos;t calculate the next 30 days.</p>
+          <p className="mt-1 text-sm text-muted-foreground">We couldn&apos;t calculate the next 2 weeks.</p>
         </div>
         <Button type="button" size="sm" variant="outline" disabled={retrying} onClick={onRetry}>
           {retrying ? 'Trying again…' : 'Try again'}
@@ -52,14 +52,14 @@ export function UpcomingCharges({ forecast, error, retrying, onRetry }: Props) {
         <div>
           <h2 id="upcoming-charges-heading" className="text-base font-semibold text-foreground">Upcoming charges</h2>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Projected from saved dates for 30 days ·{' '}
+            Next 2 weeks ·{' '}
             <span className="tabular-nums">
               {totalIsEstimate ? '≈ ' : ''}
               {formatCurrency(
                 forecast.forecast_total_in_base,
                 forecast.currency_conversion.base_currency,
               )}
-              {forecast.unconverted_occurrence_count > 0 ? ' converted subtotal' : ' total'}
+              {forecast.unconverted_occurrence_count > 0 ? ' converted subtotal' : ''}
             </span>
           </p>
         </div>
@@ -83,7 +83,7 @@ export function UpcomingCharges({ forecast, error, retrying, onRetry }: Props) {
         <div className="py-8 text-center">
           <CalendarDays className="mx-auto h-5 w-5 text-muted-foreground" aria-hidden="true" />
           <p className="mt-2 text-sm font-medium text-foreground">No charges are projected</p>
-          <p className="mt-1 text-sm text-muted-foreground">Nothing with a saved date falls in the next 30 days.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Nothing with a saved date falls in the next 2 weeks.</p>
         </div>
       ) : (
         <ol className="mt-4 divide-y divide-border">
@@ -97,10 +97,9 @@ export function UpcomingCharges({ forecast, error, retrying, onRetry }: Props) {
                 <BrandLogo name={charge.name} category={charge.category} className="h-7 w-7" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-foreground">{charge.name}</p>
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {charge.charge_kind === 'trial_conversion' ? 'First charge after trial' : 'Expected renewal'}
-                    {charge.due_date_source === 'projected_from_recorded_cycle' ? ' · projected' : ''}
-                  </p>
+                  {charge.charge_kind === 'trial_conversion' ? (
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">First charge after trial</p>
+                  ) : null}
                 </div>
                 <div className="shrink-0 text-right">
                   <p className="text-sm font-semibold tabular-nums text-foreground">
