@@ -61,7 +61,7 @@ class AgentActionTests(unittest.TestCase):
         sub = Subscription(
             id=uuid4(), user_id=user_id, name=name, category=Category.software,
             amount=20, currency="AUD", converted_amount=20,
-            cycle=BillingCycle.monthly, next_due=datetime(2026, 9, 1),
+            cycle=BillingCycle.monthly, next_due=self.future(30),
             is_active=True,
         )
         self.db.add(sub)
