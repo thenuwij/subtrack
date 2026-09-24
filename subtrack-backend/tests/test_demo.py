@@ -8,7 +8,7 @@ from unittest.mock import patch
 import jwt
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -189,6 +189,16 @@ class DemoSessionTests(unittest.TestCase):
         preference = self.db.get(UserPreference, user_id)
         self.assertIsNone(preference.onboarding_completed_at)
         self.assertEqual(preference.monthly_income, 6500)
+
+    def test_new_demo_uses_few_database_round_trips(self):
+        statements = []
+        event.listen(
+            self.engine, "before_cursor_execute",
+            lambda *args, **kwargs: statements.append(1),
+        )
+        with patch.object(settings, "demo_token_secret", DEMO_SECRET):
+            create_demo_session(request_from("198.51.100.1"), self.db)
+        self.assertLessEqual(len(statements), 15)
 
     def test_expired_demos_are_purged_when_a_new_demo_starts(self):
         with patch.object(settings, "demo_token_secret", DEMO_SECRET):

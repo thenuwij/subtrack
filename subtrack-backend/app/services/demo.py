@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
@@ -67,71 +67,101 @@ def _calendar_day(days_from_today: int) -> datetime:
     return datetime(today.year, today.month, today.day, 12)
 
 
-def seed_demo_user(db: Session, user_id: str) -> None:
-    from app.routers.subscriptions import (
-        SubscriptionCreate,
-        SubscriptionUpdate,
-        create_subscription,
-        delete_subscription,
-        update_subscription,
+def _demo_subscription(db: Session, user_id: str, spec: dict) -> Subscription:
+    from app.routers.rates import conversion_for_storage
+    from app.routers.subscriptions import resolve_split
+    from app.services.recurrence import legacy_cycle_for
+
+    unit, count = spec["interval_unit"], spec["interval_count"]
+    status = spec.get("status", "active")
+    trial_end = _calendar_day(spec["trial_in"]) if "trial_in" in spec else None
+    next_due = _calendar_day(spec["due_in"]) if "due_in" in spec else trial_end
+    currency = spec.get("currency", "AUD")
+    split = resolve_split(spec["amount"])
+    converted, exchange_rate, _quality = conversion_for_storage(
+        split.amount, currency, "AUD", db,
+    )
+    return Subscription(
+        id=uuid4(),
+        user_id=user_id,
+        name=spec["name"],
+        category=Category(spec["category"]),
+        amount=split.amount,
+        full_amount=split.full_amount,
+        share_ratio=split.share_ratio,
+        split_mode=split.split_mode,
+        currency=currency,
+        converted_amount=converted,
+        exchange_rate=exchange_rate,
+        cycle=legacy_cycle_for(unit, count),
+        interval_unit=unit,
+        interval_count=count,
+        next_due=next_due,
+        trial_ends_at=trial_end,
+        status=status,
+        paused_until=(
+            _calendar_day(spec["paused_until_in"]) if "paused_until_in" in spec else None
+        ),
+        amount_type=spec.get("amount_type", "fixed"),
+        spending_type=spec.get("spending_type", "unspecified"),
+        is_active=status not in {"cancelled", "ended"},
     )
 
+
+def seed_demo_user(db: Session, user_id: str) -> None:
+    from app.services.recurrence import monthly_equivalent
+    from app.services.trials import AUTO_TRIAL_NOTE
+
+    now = _utcnow()
     db.add(UserPreference(
         user_id=user_id,
         base_currency="AUD",
         monthly_income=DEMO_MONTHLY_INCOME,
     ))
-    db.commit()
 
-    created: dict[str, UUID] = {}
-    for spec in DEMO_PAYMENTS:
-        fields = {
-            key: value for key, value in spec.items()
-            if key not in {"due_in", "trial_in", "paused_until_in"}
-        }
-        if "due_in" in spec:
-            fields["next_due"] = _calendar_day(spec["due_in"])
-        if "trial_in" in spec:
-            fields["trial_ends_at"] = _calendar_day(spec["trial_in"])
-        if "paused_until_in" in spec:
-            fields["paused_until"] = _calendar_day(spec["paused_until_in"])
-        payload = create_subscription(SubscriptionCreate(**fields), user_id=user_id, db=db)
-        created[spec["name"]] = UUID(payload["id"])
+    subs = {spec["name"]: _demo_subscription(db, user_id, spec) for spec in DEMO_PAYMENTS}
+    broadband = subs["Aussie Broadband"]
+    previous_broadband = monthly_equivalent(broadband.amount, broadband)
+    broadband.amount = 89
+    broadband.converted_amount = 89
+    rows: list = list(subs.values())
 
-    update_subscription(
-        created["Aussie Broadband"], SubscriptionUpdate(amount=89), user_id=user_id, db=db,
-    )
-    removed = create_subscription(
-        SubscriptionCreate(
-            name="Kayo Sports", category="streaming", amount=30,
-            interval_unit="month", interval_count=1, next_due=_calendar_day(10),
+    chatgpt = subs["ChatGPT Plus"]
+    rows.extend([
+        SubscriptionChange(
+            user_id=user_id, subscription_id=chatgpt.id, name=chatgpt.name,
+            kind=ChangeKind.added, old_monthly=None,
+            new_monthly=monthly_equivalent(chatgpt.amount, chatgpt),
+            currency=chatgpt.currency, changed_at=now - timedelta(days=4),
         ),
-        user_id=user_id,
-        db=db,
-    )
-    delete_subscription(UUID(removed["id"]), user_id=user_id, db=db)
+        SubscriptionChange(
+            user_id=user_id, subscription_id=broadband.id, name=broadband.name,
+            kind=ChangeKind.price_change, old_monthly=previous_broadband,
+            new_monthly=monthly_equivalent(broadband.amount, broadband),
+            currency="AUD", changed_at=now - timedelta(days=8),
+        ),
+        SubscriptionChange(
+            user_id=user_id, subscription_id=uuid4(), name="Kayo Sports",
+            kind=ChangeKind.removed, old_monthly=30, new_monthly=None,
+            currency="AUD", changed_at=now - timedelta(days=13),
+        ),
+    ])
 
-    changes = db.query(SubscriptionChange).filter(SubscriptionChange.user_id == user_id).all()
-    for change in changes:
-        if change.kind == ChangeKind.added and change.name != "ChatGPT Plus":
-            db.delete(change)
-        elif change.kind == ChangeKind.added:
-            change.changed_at = _utcnow() - timedelta(days=4)
-        elif change.kind == ChangeKind.price_change:
-            change.changed_at = _utcnow() - timedelta(days=8)
-        elif change.kind == ChangeKind.removed:
-            change.changed_at = _utcnow() - timedelta(days=13)
-
-    insurance = db.query(Subscription).filter(
-        Subscription.user_id == user_id, Subscription.name == "Car insurance",
-    ).one()
-    db.add(PaymentReminder(
-        user_id=user_id, subscription_id=insurance.id, kind="renewal", days_before=30,
-        note="Compare quotes before it renews",
-    ))
+    trial = subs["Disney+"]
+    rows.extend([
+        PaymentReminder(
+            id=uuid4(), user_id=user_id, subscription_id=trial.id, kind="trial_end",
+            days_before=7, target_date=trial.trial_ends_at, note=AUTO_TRIAL_NOTE,
+            is_active=True,
+        ),
+        PaymentReminder(
+            user_id=user_id, subscription_id=subs["Car insurance"].id, kind="renewal",
+            days_before=30, note="Compare quotes before it renews",
+        ),
+    ])
 
     for spec in DEMO_DETECTIONS:
-        db.add(DetectedSubscription(
+        rows.append(DetectedSubscription(
             user_id=user_id,
             merchant=spec["merchant"],
             sender_domain=spec["sender_domain"],
@@ -152,6 +182,8 @@ def seed_demo_user(db: Session, user_id: str) -> None:
             charge_count=spec["charge_count"],
             status=DetectionStatus.pending,
         ))
+
+    db.add_all(rows)
     db.commit()
 
 
