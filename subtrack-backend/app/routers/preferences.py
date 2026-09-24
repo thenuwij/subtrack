@@ -1,5 +1,6 @@
 import logging
 import math
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,17 +21,24 @@ class PreferenceUpdate(BaseModel):
 
     base_currency: Literal["AUD", "USD", "GBP", "SGD", "EUR", "JPY"] | None = None
     monthly_income: float | None = Field(default=None, ge=0)
+    onboarding_completed: bool | None = None
 
 @router.get("")
 def get_preferences(user_id: str = Depends(verify_token), db: Session = Depends(get_db)):
     pref = db.query(UserPreference).filter(UserPreference.user_id == user_id).first()
     if not pref:
         # Return default if no preference set yet
-        return {"base_currency": "AUD", "monthly_income": None, "timezone": "UTC"}
+        return {
+            "base_currency": "AUD",
+            "monthly_income": None,
+            "timezone": "UTC",
+            "onboarding_completed": False,
+        }
     return {
         "base_currency": pref.base_currency,
         "monthly_income": pref.monthly_income,
         "timezone": pref.timezone or "UTC",
+        "onboarding_completed": pref.onboarding_completed_at is not None,
     }
 
 @router.patch("")
@@ -82,6 +90,10 @@ def update_preferences(
         pref.base_currency = new_base
     if "monthly_income" in body.model_fields_set:
         pref.monthly_income = body.monthly_income
+    if body.onboarding_completed is True and pref.onboarding_completed_at is None:
+        pref.onboarding_completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    elif body.onboarding_completed is False:
+        pref.onboarding_completed_at = None
 
     db.commit()
     logger.info("Preference updated", extra={"user_id": user_id})
@@ -89,6 +101,7 @@ def update_preferences(
         "base_currency": pref.base_currency,
         "monthly_income": pref.monthly_income,
         "timezone": pref.timezone or "UTC",
+        "onboarding_completed": pref.onboarding_completed_at is not None,
         "income_converted": income_converted,
         "income_conversion_rate_as_of": income_rate_as_of,
     }

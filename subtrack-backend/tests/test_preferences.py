@@ -45,6 +45,21 @@ class PreferenceContractTests(unittest.TestCase):
         self.assertIsNone(result["monthly_income"])
         self.assertEqual(get_preferences("other", self.db)["monthly_income"], 9000)
 
+    def test_onboarding_defaults_to_incomplete_and_can_be_completed_or_replayed(self):
+        self.assertFalse(get_preferences("new-user", self.db)["onboarding_completed"])
+
+        done = update_preferences(
+            PreferenceUpdate(onboarding_completed=True), user_id="new-user", db=self.db,
+        )
+        self.assertTrue(done["onboarding_completed"])
+        self.assertTrue(get_preferences("new-user", self.db)["onboarding_completed"])
+        self.assertEqual(done["base_currency"], "AUD")
+
+        replay = update_preferences(
+            PreferenceUpdate(onboarding_completed=False), user_id="new-user", db=self.db,
+        )
+        self.assertFalse(replay["onboarding_completed"])
+
     def test_non_finite_negative_and_unknown_values_fail_validation(self):
         for payload in (
             {"monthly_income": float("nan")},

@@ -380,6 +380,7 @@ class UserPreference(Base):
     base_currency = Column(String, default="AUD")
     monthly_income = Column(Float, nullable=True)     # in base currency; drives share-of-income
     timezone = Column(String(64), nullable=False, default="UTC")
+    onboarding_completed_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
