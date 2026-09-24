@@ -5,6 +5,7 @@ import { AgentChat } from '@/components/agent/AgentChat'
 import { AgentPageContextProvider } from '@/lib/agent/page-context'
 import { ApiCacheProvider } from '@/components/providers/ApiCacheProvider'
 import { OnboardingTour } from '@/components/onboarding/OnboardingTour'
+import { DemoBanner } from '@/components/demo/DemoBanner'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -14,6 +15,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="flex min-h-screen">
           <Navbar />
           <main className="min-w-0 flex-1 overflow-auto bg-background pb-20 pt-14 md:pb-0 md:pt-0">
+            <DemoBanner />
             {children}
           </main>
           <AgentChat />

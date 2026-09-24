@@ -19,6 +19,7 @@ import {
   legacyMonthlyEquivalent,
 } from '@/lib/utils/recurrence'
 import { createClient } from '@/lib/supabase/client'
+import { endDemo } from '@/lib/auth/session'
 import { API_URL } from '@/lib/config'
 
 const REQUEST_TIMEOUT_MS = 15_000
@@ -34,6 +35,7 @@ export class SessionExpiredError extends Error {
 export async function handleExpiredSession() {
   if (sessionExpiryHandled || typeof window === 'undefined') return
   sessionExpiryHandled = true
+  endDemo()
   try {
     // Local scope clears this browser's stale credentials without revoking
     // every other device the user may still be signed in on.

@@ -6,6 +6,7 @@ import { listAgentThreads } from '@/lib/agent/api'
 import type { AgentThread } from '@/lib/agent/types'
 import { apiKeys, useApi } from '@/lib/hooks/useApi'
 import { useStoredString } from '@/lib/hooks/useStoredState'
+import { useIsDemo } from '@/lib/auth/session'
 
 const HIDDEN_KEY = 'subtrack:getting-started-hidden'
 const ASSISTANT_PROMPT = 'What do my recurring payments cost each month?'
@@ -20,9 +21,11 @@ export function GettingStarted({ gmailConnected, hasPayments, hasIncome }: Getti
   const [hidden, setHidden] = useStoredString(HIDDEN_KEY, '')
   const threads = useApi<AgentThread[]>(apiKeys.agentThreads, token => listAgentThreads(token))
   const askedAssistant = (threads.data ?? []).some(thread => thread.message_count > 0)
+  const isDemo = useIsDemo()
 
-  const items = [
+  const allItems = [
     {
+      gmail: true,
       done: gmailConnected,
       label: 'Connect Gmail',
       detail: 'Subtrack finds recurring payments in your receipts.',
@@ -51,6 +54,7 @@ export function GettingStarted({ gmailConnected, hasPayments, hasIncome }: Getti
       },
     },
   ]
+  const items = allItems.filter(item => !(isDemo && 'gmail' in item))
   const completed = items.filter(item => item.done).length
 
   if (hidden || completed === items.length || threads.isLoading) return null

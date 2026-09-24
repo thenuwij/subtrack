@@ -33,7 +33,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { getAccessToken } from '@/lib/auth/session'
+import { getAccessToken, useIsDemo } from '@/lib/auth/session'
 
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
 /** Keyed by the code the Gmail callback forwards: Google's own OAuth error,
@@ -82,6 +82,7 @@ export default function AccountPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [deleteBusy, setDeleteBusy] = useState(false)
+  const isDemo = useIsDemo()
   const { baseCurrency, setBaseCurrency, isLoading, isUpdating: currencyUpdating } = useCurrency()
 
   useEffect(() => {
@@ -325,8 +326,8 @@ export default function AccountPage() {
 
   const meta       = user?.user_metadata ?? {}
   const avatarUrl  = meta.avatar_url as string | undefined
-  const fullName   = (meta.full_name ?? meta.name ?? '') as string
-  const email      = user?.email ?? ''
+  const fullName   = (meta.full_name ?? meta.name ?? (isDemo ? 'Demo user' : '')) as string
+  const email      = user?.email ?? (isDemo ? 'Sample data, reset after 24 hours' : '')
   const initials   = fullName
     .split(' ')
     .map((n: string) => n[0])
