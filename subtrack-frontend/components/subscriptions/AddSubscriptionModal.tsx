@@ -716,7 +716,7 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
             {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
           </div>
 
-          <DialogFooter className="gap-2">
+          <DialogFooter className="sticky -bottom-4 z-10 gap-2 bg-popover">
             <Button type="button" variant="outline" onClick={handleClose} disabled={loading}>Cancel</Button>
             <Button type="submit" disabled={loading || capabilityState === 'loading'}>
               {loading ? (isEditing ? 'Saving…' : 'Adding…') : (isEditing ? 'Save changes' : 'Add payment')}
