@@ -854,6 +854,7 @@ def _run_scan(user_id: str, run_id: str):
     overwriting the status of a newer retry.
     """
     from app.gmail.analyzer import AnalysisFailed, analyze_bounded, find_similar
+    from app.gmail.redaction import redact_owner
     from app.gmail.scanner import scan
 
     started = time.monotonic()
@@ -940,7 +941,7 @@ def _run_scan(user_id: str, run_id: str):
         analysis_deadline = max(time.monotonic() + 1, deadline - 18)
         try:
             outcome = analyze_bounded(
-                scan_result.candidates,
+                redact_owner(scan_result.candidates, account.email_address),
                 on_batch=apply_batch,
                 on_progress=lambda done, total: heartbeat("analysing", done, total),
                 deadline=analysis_deadline,
