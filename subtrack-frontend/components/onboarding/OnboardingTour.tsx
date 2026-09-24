@@ -28,6 +28,17 @@ function visible(selector: string) {
   }
 }
 
+function firstVisible(...selectors: string[]) {
+  return () => {
+    for (const selector of selectors) {
+      const match = Array.from(document.querySelectorAll(selector))
+        .find(element => (element as HTMLElement).offsetParent !== null)
+      if (match) return match
+    }
+    return document.body
+  }
+}
+
 const steps: DriveStep[] = [
   {
     element: visible('[data-tour="nav-review"]'),
@@ -51,8 +62,7 @@ const steps: DriveStep[] = [
     },
   },
   {
-    element: '[data-tour="assistant"]',
-    skipMissingElement: true,
+    element: firstVisible('[data-tour="assistant"]', '[data-tour="nav-assistant"]'),
     popover: {
       title: 'Ask the assistant',
       description: 'Ask questions in plain English. It can prepare changes for you, and nothing happens until you confirm.',

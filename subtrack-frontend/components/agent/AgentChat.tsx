@@ -111,7 +111,7 @@ export function AgentChat() {
         }}
         aria-label={open ? 'Minimise financial assistant' : 'Open financial assistant'}
         aria-expanded={open}
-        className={`fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-50 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-all hover:bg-primary/90 md:bottom-6 md:right-6 ${open ? 'pointer-events-none scale-90 opacity-0' : ''}`}
+        className={`fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-50 hidden h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-all hover:bg-primary/90 md:bottom-6 md:right-6 md:flex ${open ? 'pointer-events-none scale-90 opacity-0' : ''}`}
       >
         {open ? <X className="h-5 w-5" /> : <MessageCircle className="h-5 w-5" />}
       </button>
