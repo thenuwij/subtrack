@@ -2,9 +2,11 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { LayoutDashboard, CreditCard, LogOut, UserCircle, MailCheck, Sparkles } from 'lucide-react'
 import { getDetected, getGmailStatus } from '@/lib/api'
+import { apiKeys, useApi } from '@/lib/hooks/useApi'
+import type { GmailStatus } from '@/types'
 import { Logo, LogoMark } from '@/components/layout/Logo'
 
 const links = [
@@ -18,26 +20,18 @@ const links = [
 export default function Navbar() {
   const pathname = usePathname()
   const router = useRouter()
-  const [pendingCount, setPendingCount] = useState(0)
-  const [gmailConnected, setGmailConnected] = useState<boolean | null>(null)
+  const detected = useApi(apiKeys.detected('pending'), token => getDetected(token, 'pending'))
+  const gmail = useApi<GmailStatus>(apiKeys.gmailStatus, token => getGmailStatus(token))
+  const pendingCount = detected.data?.length ?? 0
+  const gmailConnected = gmail.data ? gmail.data.connected : null
+  const revalidateDetected = detected.mutate
+  const lastPathname = useRef(pathname)
 
   useEffect(() => {
-    async function loadPending() {
-      const { data: { session } } = await createClient().auth.getSession()
-      if (!session) return
-      try {
-        const [detected, gmail] = await Promise.all([
-          getDetected(session.access_token),
-          getGmailStatus(session.access_token).catch(() => null),
-        ])
-        setPendingCount(detected.length)
-        setGmailConnected(gmail?.connected ?? null)
-      } catch {
-        // A badge is not worth surfacing an error for.
-      }
-    }
-    loadPending()
-  }, [pathname])
+    if (lastPathname.current === pathname) return
+    lastPathname.current = pathname
+    void revalidateDetected()
+  }, [pathname, revalidateDetected])
 
   async function handleLogout() {
     await createClient().auth.signOut()
