@@ -18,6 +18,7 @@ from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 
 from app.config import settings
+from app.gmail.redaction import redact
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,9 @@ def _excerpt(text: str, limit: int = 600) -> str:
         line = re.sub(r"\s+", " ", raw).strip()
         if len(line) < 3 or _NOISE.search(line) or _CSS_LIKE.search(line):
             continue
+        line = redact(line)
+        if len(line) < 3:
+            continue
         lines.append(line)
         if sum(len(x) for x in lines) > limit:
             break
@@ -240,7 +244,7 @@ def _to_candidate(message: dict) -> ReceiptCandidate:
         message_id=message["id"],
         sender_domain=domain,
         merchant=merchant,
-        subject=subject[:120],
+        subject=redact(subject)[:120],
         date=received.strftime("%Y-%m-%d"),
         amount=amount,
         currency=currency,

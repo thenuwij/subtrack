@@ -18,7 +18,7 @@ export default function PrivacyPage() {
         <Link href="/login" className="text-sm font-medium text-primary hover:underline">Sign in</Link>
       </nav>
       <article className="prose prose-neutral mx-auto max-w-3xl px-5 py-12 dark:prose-invert sm:px-8">
-        <p className="text-sm font-medium text-primary">Last updated 5 August 2026</p>
+        <p className="text-sm font-medium text-primary">Last updated 24 September 2026</p>
         <h1>Privacy policy</h1>
         <p>
           Subtrack is a recurring-payment tracker. This policy explains what information Subtrack accesses, why it is used, which services process it, how long it is kept, and the controls available to you. It applies to the Subtrack website, API, Gmail connection, and AI assistant.
@@ -33,6 +33,10 @@ export default function PrivacyPage() {
         <p>
           Subtrack stores information you enter or approve, including recurring-payment names, amounts, currencies, billing cadence, categories, due and lifecycle dates, shared-bill details, free trials, reminders, income preference, and essential or optional labels. Subtrack is not a bank ledger and does not connect to a bank account.
         </p>
+        <h3>Demo sessions</h3>
+        <p>
+          The demo creates a private sandbox with sample data and no account. To limit abuse, Subtrack stores a one-way keyed hash of the visitor&apos;s network address with each demo, never the address itself. A demo expires 24 hours after it starts. Expired demos, including anything typed into the assistant, are deleted the next time a new demo starts or the service restarts. Demos cannot connect Gmail.
+        </p>
         <h3>Assistant data</h3>
         <p>
           Subtrack stores assistant conversations, limited page context, proposed actions, confirmations, and cited alternative-research results so conversations survive refreshes and actions can be audited. Page context contains allow-listed route, filter, and record identifiers; it does not grant the assistant access to another user&apos;s records.
@@ -43,7 +47,7 @@ export default function PrivacyPage() {
           Gmail connection is optional and separate from Google sign-in. If you connect Gmail, Subtrack requests <code>gmail.readonly</code>, email identity, and OpenID scopes. The Gmail scope is read-only: Subtrack cannot send, change, move, or delete email.
         </p>
         <p>
-          A scan searches likely receipt, invoice, renewal, cancellation, and trial emails from approximately the previous three months. For candidate messages it temporarily processes the sender, subject, date, and relevant message text needed to identify a recurring payment. Candidate details may be sent to Anthropic&apos;s API for classification. Raw Gmail messages and bodies are not stored in Subtrack&apos;s database. Subtrack stores only derived review findings, confidence and evidence summaries, scan status, the connected email address, and an encrypted Google refresh token needed for later scans.
+          A scan searches likely receipt, invoice, renewal, cancellation, and trial emails from approximately the previous three months. For candidate messages it temporarily reads the message to find the amount, then keeps only the sender&apos;s domain, the date, the subject and a short excerpt of the body. Before anything is sent to Anthropic&apos;s API for classification, Subtrack removes personal details from the subject and excerpt: email addresses, phone numbers, card digits, street addresses and postcodes, account, customer and reference numbers, links, greeting names, and name parts taken from your connected Gmail address. Each excerpt sent is limited to about 320 characters. This redaction is automatic and may not catch every personal detail, which is why only short excerpts of likely receipts are ever sent. Raw Gmail messages and bodies are not stored in Subtrack&apos;s database. Subtrack stores only derived review findings, confidence and evidence summaries, scan status, the connected email address, and an encrypted Google refresh token needed for later scans.
         </p>
         <p>
           OAuth state is one-time, hashed, bound to the signed-in user, and expires after ten minutes. The PKCE verifier and refresh token are encrypted. Authorization credentials are returned to the browser in a URL fragment, removed immediately, and are not placed in Vercel request URLs.
@@ -64,7 +68,7 @@ export default function PrivacyPage() {
 
         <h2>AI processing and automated decisions</h2>
         <p>
-          Anthropic processes candidate email content, assistant messages, and the minimum relevant recurring-payment context needed for the requested feature. AI results can be wrong. Gmail findings enter a review queue, and every AI-proposed data change remains inert until you confirm it. Subtrack does not make investment, credit, insurance, employment, or other legally significant decisions about users.
+          Anthropic processes redacted candidate email excerpts, assistant messages, and the minimum relevant recurring-payment context needed for the requested feature. When you ask for cheaper alternatives, the payment&apos;s name, category, price and cadence, plus any requirements you give, are redacted in the same way and then used to search the web for current prices. AI results can be wrong. Gmail findings enter a review queue, and every AI-proposed data change remains inert until you confirm it. Subtrack does not make investment, credit, insurance, employment, or other legally significant decisions about users.
         </p>
 
         <h2>Service providers and disclosure</h2>
@@ -78,6 +82,7 @@ export default function PrivacyPage() {
           <li>Raw Gmail message content exists only during a scan and is not retained in Subtrack&apos;s database.</li>
           <li>The encrypted Gmail refresh token remains until you disconnect Gmail or delete your Subtrack app data.</li>
           <li>One-time Gmail connection state expires after ten minutes and is consumed on use.</li>
+          <li>Expired demo sandboxes and their hashed visitor identifier are deleted the next time a demo starts or the service restarts.</li>
           <li>Alternative-research cache entries stop being used after approximately 24 hours; an expired database row may remain until your app data is deleted.</li>
           <li>Operational and security logs may be retained for the periods configured by the relevant hosting provider. Subtrack avoids intentionally logging email bodies, OAuth credentials, assistant financial content, and raw external error bodies.</li>
         </ul>

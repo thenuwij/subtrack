@@ -123,7 +123,7 @@ class DetectedSubscription(BaseModel):
         description="What the user is paying for, specific enough to tell apart "
                     "from anything else billed by the same sender. Name the "
                     "product, not just the company: 'Apple Music', 'iCloud 2TB', "
-                    "'Origin Energy', 'Rent - 90/2-6 Willis St'. Read the excerpt "
+                    "'Origin Energy', 'Rent', 'Water usage'. Never include personal details such as names or street addresses. Read the excerpt "
                     "— the subject is often generic ('Your tax invoice from "
                     "Apple.') while the excerpt names the actual product."
     )
@@ -131,7 +131,7 @@ class DetectedSubscription(BaseModel):
         description="A stable lowercase identifier for this exact bill, used to "
                     "recognise it again on a later scan: lowercase, words joined "
                     "by hyphens, no amounts or dates. E.g. 'apple-music', "
-                    "'apple-icloud-2tb', 'origin-energy', 'rent-willis-st'. It "
+                    "'apple-icloud-2tb', 'origin-energy', 'rent'. It "
                     "must stay identical for the same bill across scans even if "
                     "the wording of the emails changes."
     )
