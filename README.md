@@ -1,83 +1,66 @@
 # Subtrack
 
-Subtrack is a recurring-payment tracker that finds your subscriptions by reading your Gmail receipts. No bank-feed access, no manual expense logging. It normalizes what it finds into one view across currencies and billing cadences, and layers an AI assistant on top for analysis and changes you confirm.
+[![Live demo](https://img.shields.io/badge/Live_demo-Try_it_now-0A84FF?style=for-the-badge&logo=vercel&logoColor=white&labelColor=0060DF)](https://subtrack-beryl.vercel.app/login)
 
-Deployed live: [subtrack-beryl.vercel.app](https://subtrack-beryl.vercel.app)
+![Next.js](https://img.shields.io/badge/Next.js-20232A?logo=nextdotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-20232A?logo=typescript&logoColor=3178C6)
+![FastAPI](https://img.shields.io/badge/FastAPI-20232A?logo=fastapi&logoColor=009688)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-20232A?logo=postgresql&logoColor=4169E1)
+![Claude](https://img.shields.io/badge/Claude_API-20232A?logo=anthropic&logoColor=D97757)
 
-[![CI](https://github.com/thenuwij/subtrack/actions/workflows/ci.yml/badge.svg)](https://github.com/thenuwij/subtrack/actions/workflows/ci.yml)
+**Know every subscription you're paying for, and catch it when the price changes.**
 
-## Features at a glance
+Subtrack finds your recurring payments in your Gmail receipts, shows what they really cost each month, and flags price rises, expiring free trials and duplicates. An AI agent helps you act on it, and nothing changes until you approve.
 
-- Tracks subscriptions, rent, bills, memberships, and other recurring payments.
-- Supports flexible cadences such as fortnightly, every four weeks, quarterly, semiannual, multi-year, and custom every N days/weeks/months/years.
-- Shows normalized monthly/yearly equivalents separately from exact date-window charge forecasts.
-- Detects likely recurring payments and trials from the last three months of Gmail receipts, staged for approval rather than tracked automatically.
-- Creates dashboard reminders for renewals, cancellation dates, and expiring free trials.
-- Flags duplicate records, price changes, and user-labelled opportunities to review costs.
-- Provides a persistent, resizable AI workspace with conversation history and page context.
-- Proposes add, edit, remove, merge, reminder, and review actions; the user confirms every write before it runs.
-- Researches cheaper alternatives with citations.
-- Supports AUD, USD, GBP, SGD, EUR, and JPY with explicit stale/unconverted states.
-- Distinguishes fixed estimates, variable bills, active/paused/cancelling/cancelled/ended payments, shared bills, and user-controlled essential/optional labels across 17 spending categories.
-- Lets authenticated users export their Subtrack app data or permanently delete all user-owned app records.
+**[Try the demo →](https://subtrack-beryl.vercel.app/login)** No sign-up needed: you get a private sandbox with sample data, cleared after 24 hours.
 
-Subtrack provides spending information and organisation tools, not investment, tax, credit, or regulated financial advice.
+## Why Subtrack
+
+Subscriptions are easy to start and easy to forget. Prices creep up, free trials quietly convert, and the same service ends up billed twice. Subtrack gives you one honest view of everything you've signed up for, without linking your bank or typing anything in.
+
+## What it does
+
+- **Finds your payments for you.** Connect Gmail (read-only) and Subtrack detects subscriptions, bills and trials from your receipts. You approve each one before it's tracked.
+- **Shows your real monthly cost.** Rent, utilities, streaming and memberships in one total, whatever the billing cycle or currency.
+- **Catches what changed.** Price rises, trials about to convert, duplicate payments and upcoming charges, all on one dashboard.
+- **Reminds you in time.** Set reminders before renewals and trial end dates.
+- **Helps you cut costs.** Ask the AI agent where your money goes, or have it research cheaper alternatives with sources.
 
 ## How it works
 
-### Subscriptions you forgot you were paying for
+1. **Connect Gmail.** Subtrack scans the last three months of receipts with read-only access.
+2. **Review what it found.** Every detection waits in your inbox for approval, so nothing wrong sneaks into your totals.
+3. **Stay on top of it.** Your dashboard tracks monthly cost, upcoming charges and anything that changed.
 
-Connecting Gmail grants read-only access. Subtrack searches the last three months for receipts, invoices, and trial notices, then works out the merchant, amount, currency, and billing cadence from what it finds.
+New users get a short guided tour and a getting-started checklist to walk them through setup.
 
-Nothing it finds is tracked automatically. Every detection waits in a review queue for your verdict, because email parsing is noisy and a single wrong entry makes the whole total untrustworthy. Anything the scan cannot read confidently is sent to review as unknown rather than guessed at, and a receipt it fails on never costs you the rest of the results.
+## An AI agent you stay in control of
 
-### Billing cycles that match reality
+Ask questions in plain English, like *"What changed this month?"* or *"Find me a cheaper alternative to Netflix."* The agent reads your data and prepares updates such as adding, editing or merging payments, or setting reminders. It never changes anything on its own: every action is a proposal until you confirm it.
 
-Real billing cycles are messier than "monthly". Subtrack handles fortnightly, four-weekly, quarterly, multi-year, and arbitrary custom intervals, and keeps two different numbers apart: a normalized rate for budgeting, and an exact forecast of the charges genuinely landing in a date range. Month-end and leap-year edges are handled properly, so a payment anchored to the 31st does not drift.
+## Private by design
 
-It also tracks the shape of a commitment over time: paused, cancelling, ended, still in a free trial, split with someone else, or a variable bill whose amount moves.
+Gmail access is read-only and can be revoked at any time. You can export everything Subtrack holds about you, or delete it all.
 
-### Multi-currency totals
-
-Amounts are stored in the currency you were actually charged in. A converted figure appears only when a genuine exchange rate is available; Subtrack never invents a 1:1 fallback to fill a gap. Every total says how good its conversion is: exact, converted at the current rate, converted at a stale rate, or not converted at all. A number never looks more precise than it is.
-
-### AI agentic assistance
-
-The assistant reads your tracked payments and the page you are on, and works across them: totals and upcoming charges, duplicates and price rises, where you are overspending, and what a cheaper alternative would cost, researched live with citations.
-
-It cannot change anything. Everything it suggests is only a proposal until you confirm it, whether that is adding, editing, removing, merging, setting a reminder, or approving a detection. Confirming is a separate step that re-checks the record still looks the way it did when the proposal was made, so a stale or mistaken suggestion cannot quietly rewrite your data.
-
-### Your data stays yours
-
-Every query is scoped to your verified account, and the browser never talks to the database directly. Gmail access uses read-only scope with encrypted tokens, and disconnecting revokes it. You can export everything Subtrack holds about you, or delete all of it.
-
-## Built with
-
-| Layer | Technology |
-|---|---|
-| Frontend | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4, Radix UI |
-| Backend | FastAPI, SQLAlchemy 2.0, Alembic |
-| Database | Neon PostgreSQL |
-| Authentication | Supabase Auth, with Google OAuth plus email/password sign-up, sign-in, and reset |
-| AI | Anthropic Claude API |
-| Gmail | Google Gmail API with read-only scope |
-| Exchange rates | Frankfurter API |
-| Deployment | Vercel frontend, Render API |
-
-## Project structure
+## Repository structure
 
 ```text
 subtrack/
-├── subtrack-frontend/       # Next.js application
-├── subtrack-backend/        # FastAPI application, tests, and migrations
-├── render.yaml              # Render Blueprint
-└── README.md
+├── subtrack-frontend/     # Next.js web app (deployed on Vercel)
+│   ├── app/               # Pages: dashboard, payments, inbox review, assistant, account
+│   ├── components/        # UI, dashboard widgets, onboarding tour and the AI assistant panel
+│   └── lib/               # API client, data caching, currency and date helpers
+├── subtrack-backend/      # FastAPI service (deployed on Render)
+│   ├── app/
+│   │   ├── routers/       # REST endpoints, including the demo sandbox
+│   │   ├── agent/         # AI agent tools and confirm-before-change actions
+│   │   ├── gmail/         # Gmail receipt scanning and payment detection
+│   │   └── services/      # Billing cycles, reminders, duplicate detection
+│   ├── alembic/           # Database migrations
+│   └── tests/
+└── render.yaml            # Render deployment config
 ```
 
-## What the numbers mean
+---
 
-- **Normalized equivalent** spreads a recurring commitment into a budgeting rate. Day cadences use 365 days/year and week cadences use 52 weeks/year. It does not mean the payment is charged monthly.
-- **Exact forecast** counts the real charges falling inside a date window. It honours end and cancellation dates and does not use prorated averages.
-- **Recorded history** means changes to tracked commitments and what was found in email, not a complete bank-transaction ledger. Subtrack does not claim exact historical spending.
-- Billing and reminder dates are treated as calendar dates, so a timezone difference can never shift a bill to the previous day.
-- Variable bills use the latest amount you approved, clearly labelled as an estimate.
+*Subtrack provides spending information and organisation tools, not financial advice.*
