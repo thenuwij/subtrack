@@ -2,7 +2,6 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { useEffect, useRef } from 'react'
 import { LayoutDashboard, CreditCard, LogOut, UserCircle, MailCheck, Sparkles } from 'lucide-react'
 import { getDetected, getGmailStatus } from '@/lib/api'
 import { apiKeys, useApi } from '@/lib/hooks/useApi'
@@ -24,14 +23,6 @@ export default function Navbar() {
   const gmail = useApi<GmailStatus>(apiKeys.gmailStatus, token => getGmailStatus(token))
   const pendingCount = detected.data?.length ?? 0
   const gmailConnected = gmail.data ? gmail.data.connected : null
-  const revalidateDetected = detected.mutate
-  const lastPathname = useRef(pathname)
-
-  useEffect(() => {
-    if (lastPathname.current === pathname) return
-    lastPathname.current = pathname
-    void revalidateDetected()
-  }, [pathname, revalidateDetected])
 
   async function handleLogout() {
     await createClient().auth.signOut()

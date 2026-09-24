@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ArrowUpRight, Check, Clock3, Mail, RotateCcw, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
@@ -21,6 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { formatCategory } from '@/lib/utils/categories'
 import { toast } from 'sonner'
 import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
+import { apiKeys, errorMessage, useApi } from '@/lib/hooks/useApi'
 import { GmailScanProgress } from '@/components/gmail/GmailScanProgress'
 import type { AmountType, RecurrenceUnit } from '@/types'
 import {
@@ -71,11 +72,26 @@ async function token() {
 }
 
 export default function ReviewPage() {
-  const [items, setItems] = useState<DetectedSubscription[]>([])
-  const [gmail, setGmail] = useState<GmailStatus | null>(null)
-  const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
   const [tab, setTab] = useState<'pending' | 'dismissed'>('pending')
+  const gmailQuery = useApi<GmailStatus>(apiKeys.gmailStatus, getGmailStatus, {
+    refreshInterval: latest => (latest?.scan_status === 'running' ? 3000 : 0),
+  })
+  const scanRunning = gmailQuery.data?.scan_status === 'running'
+  // Poll both status and findings: successful model batches are committed as
+  // they finish, so useful results can appear before the bounded scan ends.
+  const itemsQuery = useApi<DetectedSubscription[]>(
+    apiKeys.detected(tab),
+    t => getDetected(t, tab),
+    { refreshInterval: scanRunning ? 3000 : 0 },
+  )
+  const items = itemsQuery.data ?? []
+  const gmail = gmailQuery.data ?? null
+  const loading = itemsQuery.isLoading || gmailQuery.isLoading
+  const loadError = [
+    errorMessage(itemsQuery.error, 'Could not load inbox findings.'),
+    errorMessage(gmailQuery.error, 'Could not load Gmail status.'),
+  ].filter(Boolean).join(' ')
   const [shares, setShares] = useState<Record<string, number>>({})
   const [custom, setCustom] = useState<Record<string, string>>({})
   const [trialPrices, setTrialPrices] = useState<Record<string, string>>({})
@@ -84,9 +100,7 @@ export default function ReviewPage() {
   const [editingCadence, setEditingCadence] = useState<Record<string, boolean>>({})
   const [dueDates, setDueDates] = useState<Record<string, string>>({})
   const [amountTypes, setAmountTypes] = useState<Record<string, AmountType>>({})
-  const [loadError, setLoadError] = useState('')
   const [rescanStarting, setRescanStarting] = useState(false)
-  const loadGeneration = useRef(0)
   const busyRef = useRef(false)
   const rescanRef = useRef(false)
 
@@ -95,59 +109,14 @@ export default function ReviewPage() {
     filters: { review_status: tab },
   })
 
-  const load = useCallback(async () => {
-    const generation = ++loadGeneration.current
-    const t = await token()
-    if (generation !== loadGeneration.current) return
-    if (!t) {
-      setItems([])
-      setLoadError('Your session has expired. Sign in again to review inbox findings.')
-      return
-    }
-    const [detectedResult, statusResult] = await Promise.allSettled([
-      getDetected(t, tab),
-      getGmailStatus(t),
-    ])
-    if (generation !== loadGeneration.current) return
+  function removeItem(id: string) {
+    void itemsQuery.mutate(prev => prev?.filter(i => i.id !== id), { revalidate: false })
+  }
 
-    const errors: string[] = []
-    if (detectedResult.status === 'fulfilled') {
-      setItems(detectedResult.value)
-    } else {
-      errors.push(
-        detectedResult.reason instanceof Error
-          ? detectedResult.reason.message : 'Could not load inbox findings.',
-      )
-    }
-    if (statusResult.status === 'fulfilled') {
-      setGmail(statusResult.value)
-    } else {
-      errors.push(
-        statusResult.reason instanceof Error
-          ? statusResult.reason.message : 'Could not load Gmail status.',
-      )
-    }
-    setLoadError(errors.join(' '))
-    return statusResult.status === 'fulfilled' ? statusResult.value as GmailStatus : undefined
-  }, [tab])
-
-  useEffect(() => {
-    let active = true
-    setLoading(true)
-    void load().finally(() => {
-      if (active) setLoading(false)
-    })
-    return () => {
-      active = false
-      loadGeneration.current += 1
-    }
-  }, [load])
-
-  useEffect(() => {
-    const refresh = () => { void load() }
-    window.addEventListener('subtrack:data-changed', refresh)
-    return () => window.removeEventListener('subtrack:data-changed', refresh)
-  }, [load])
+  function reload() {
+    void itemsQuery.mutate()
+    void gmailQuery.mutate()
+  }
 
   // The Gmail handshake finishes on a throwaway callback page and sends the
   // user here, so the confirmation has to be picked up on arrival — otherwise
@@ -248,13 +217,6 @@ export default function ReviewPage() {
     }))
   }
 
-  // Poll both status and findings: successful model batches are committed as
-  // they finish, so useful results can appear before the bounded scan ends.
-  useEffect(() => {
-    if (gmail?.scan_status !== 'running') return
-    const timer = setInterval(() => { void load() }, 3000)
-    return () => clearInterval(timer)
-  }, [gmail?.scan_status, load])
 
   function beginBusy(id: string) {
     if (busyRef.current) return false
@@ -274,8 +236,7 @@ export default function ReviewPage() {
       const t = await token()
       if (!t) throw new Error('Your session has expired. Sign in again to continue.')
       await restoreDetected(t, id)
-      loadGeneration.current += 1
-      setItems(prev => prev.filter(i => i.id !== id))
+      removeItem(id)
       toast.success('Detection restored')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not restore this detection.')
@@ -357,8 +318,7 @@ export default function ReviewPage() {
           ? { amount: enteredTrialPrice }
           : {}),
       })
-      loadGeneration.current += 1
-      setItems(prev => prev.filter(i => i.id !== id))
+      removeItem(id)
       setChoosing(null)
       toast.success('Review item approved')
     } catch (error) {
@@ -379,8 +339,7 @@ export default function ReviewPage() {
       if (!t) throw new Error('Your session has expired. Sign in again to continue.')
       await dismissDetected(t, id)
       // Drop it locally rather than refetching — the row is gone either way.
-      loadGeneration.current += 1
-      setItems(prev => prev.filter(i => i.id !== id))
+      removeItem(id)
       toast.success('Detection dismissed')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not dismiss this detection.')
@@ -397,7 +356,7 @@ export default function ReviewPage() {
       const t = await token()
       if (!t) throw new Error('Your session has expired. Sign in again to continue.')
       await startGmailScan(t)
-      setGmail(g => (g ? {
+      void gmailQuery.mutate(g => (g ? {
         ...g,
         scan_status: 'running',
         scan_error: null,
@@ -406,7 +365,7 @@ export default function ReviewPage() {
         scan_total: 0,
         scan_partial: false,
         scan_message: null,
-      } : g))
+      } : g), { revalidate: false })
     } catch (e) {
       // Leave the button usable and say why — a silently ignored click reads
       // as the app being broken.
@@ -438,7 +397,7 @@ export default function ReviewPage() {
         {loadError && (
           <div className="flex flex-col gap-3 rounded-xl border border-destructive/20 bg-destructive/5 p-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-muted-foreground">{loadError}</p>
-            <Button variant="outline" size="sm" onClick={() => void load()}>Try again</Button>
+            <Button variant="outline" size="sm" onClick={reload}>Try again</Button>
           </div>
         )}
 
@@ -486,10 +445,6 @@ export default function ReviewPage() {
                 aria-selected={tab === t.key}
                 onClick={() => {
                   if (t.key === tab) return
-                  loadGeneration.current += 1
-                  setItems([])
-                  setLoadError('')
-                  setLoading(true)
                   setTab(t.key)
                 }}
                 disabled={busy !== null}
