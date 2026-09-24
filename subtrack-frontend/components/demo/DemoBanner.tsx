@@ -1,17 +1,15 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
 import { Sparkles } from 'lucide-react'
 import { endDemo, useIsDemo } from '@/lib/auth/session'
 
 export function DemoBanner() {
-  const router = useRouter()
   const isDemo = useIsDemo()
   if (!isDemo) return null
 
-  function leave() {
+  function leave(path: string) {
     endDemo()
-    router.push('/login')
+    window.location.replace(path)
   }
 
   return (
@@ -20,10 +18,10 @@ export function DemoBanner() {
         <Sparkles className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
         You&apos;re exploring a demo with sample data.
       </span>
-      <button type="button" onClick={leave} className="font-semibold text-primary underline-offset-2 hover:underline">
+      <button type="button" onClick={() => leave('/login?mode=signup')} className="font-semibold text-primary underline-offset-2 hover:underline">
         Create a free account
       </button>
-      <button type="button" onClick={leave} className="text-muted-foreground underline-offset-2 hover:underline">
+      <button type="button" onClick={() => leave('/login')} className="text-muted-foreground underline-offset-2 hover:underline">
         Exit demo
       </button>
     </div>

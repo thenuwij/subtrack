@@ -77,7 +77,6 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency, unavailable
   const view = useSyncExternalStore(subscribeToView, readStoredView, () => 'chart' as View)
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
   const [showAllPayments, setShowAllPayments] = useState(false)
-  const hasVariableAmounts = ranked.some(entry => entry.subscription.amount_type === 'variable')
 
   const categories = useMemo(() => {
     const totals = new Map<string, { total: number; items: RankedPayment[] }>()
@@ -138,11 +137,6 @@ export function SpendBreakdown({ ranked, monthlyTotal, baseCurrency, unavailable
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold text-foreground">Where your money goes</h2>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {categories.length} categor{categories.length === 1 ? 'y' : 'ies'} ·{' '}
-            {ranked.length} payment{ranked.length === 1 ? '' : 's'}
-            {hasVariableAmounts ? ' · includes estimates' : ''}
-          </p>
         </div>
 
         {/* Segmented control. Same pattern as iOS: one visible group, the

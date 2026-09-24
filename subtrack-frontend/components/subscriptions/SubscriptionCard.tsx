@@ -176,6 +176,7 @@ export function SubscriptionCard({
                 className="h-7 w-7 text-muted-foreground hover:bg-primary/10 hover:text-primary"
                 onClick={() => onReminders(subscription)}
                 aria-label={`Manage reminders for ${subscription.name}`}
+                title="Reminders"
               >
                 <Bell className="h-3.5 w-3.5" />
               </Button>
@@ -185,7 +186,7 @@ export function SubscriptionCard({
               size="sm"
               className="h-7 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={() => onEdit(subscription)}
-              aria-label="Edit recurring payment"
+              aria-label={`Edit ${subscription.name}`}
             >
               <Pencil className="mr-1 h-3.5 w-3.5" />
               Edit
@@ -195,7 +196,8 @@ export function SubscriptionCard({
               size="icon"
               className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
               onClick={() => setConfirming(true)}
-              aria-label="Delete recurring payment"
+              aria-label={`Delete ${subscription.name}`}
+              title="Delete"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </Button>

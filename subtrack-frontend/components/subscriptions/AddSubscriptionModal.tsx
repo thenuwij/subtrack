@@ -1,6 +1,7 @@
 'use client'
 
 import { type FormEvent, useEffect, useState } from 'react'
+import { ChevronDown, Plus } from 'lucide-react'
 import type {
   AmountType,
   ApiCapabilities,
@@ -138,6 +139,9 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [trialTouched, setTrialTouched] = useState(false)
+  const [showMore, setShowMore] = useState(() => Boolean(
+    initialData && (initialData.status !== 'active' || initialData.recurrence_end_at),
+  ))
   const [capabilities, setCapabilities] = useState<ApiCapabilities | null>(null)
   const [capabilityState, setCapabilityState] = useState<'loading' | 'ready' | 'legacy'>('loading')
   const [equivalence, setEquivalence] = useState<{
@@ -444,9 +448,6 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
                       <SelectItem value="variable">Varies each bill</SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs leading-5 text-muted-foreground">
-                    Variable amounts are treated as estimates in totals.
-                  </p>
                 </div>
                 <div className="grid gap-1.5">
                   <Label htmlFor="sub-spending-type">Spending type</Label>
@@ -614,7 +615,7 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
                 </p>
               ) : currentEquivalence?.failed ? (
                 <p className="text-xs text-muted-foreground">Could not calculate the preview. Equivalents will be calculated when you save.</p>
-              ) : supportsFlexibleCadence ? (
+              ) : supportsFlexibleCadence && Number.isFinite(myAmount) && myAmount > 0 ? (
                 <p className="text-xs text-muted-foreground" aria-live="polite">Calculating monthly and annual equivalents…</p>
               ) : null}
             </div>
@@ -640,7 +641,7 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
               <span>
                 <span className="block text-sm font-medium text-foreground">This is a free trial</span>
                 <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">
-                  The amount above is the price after the trial. Subtrack creates a dashboard reminder seven days before it ends.
+                  Enter the price after the trial. You get a reminder 7 days before it ends.
                 </span>
               </span>
             </label>
@@ -662,14 +663,31 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
                 <p className="text-xs text-muted-foreground">Also saved as the first expected charge date.</p>
               </div>
             ) : (
-              <div className="grid gap-1.5">
-                <Label htmlFor="sub-due">Next expected payment <span className="font-normal text-muted-foreground">(optional)</span></Label>
-                <Input id="sub-due" type="date" value={form.next_due} onChange={event => set('next_due', event.target.value)} disabled={loading} />
-              </div>
+              <OptionalDateField
+                id="sub-due"
+                label="Next payment date"
+                addLabel="Add next payment date"
+                value={form.next_due}
+                onChange={value => set('next_due', value)}
+                disabled={loading}
+              />
             )}
 
             {supportsLifecycle ? (
-              <div className="grid gap-4 rounded-xl border border-border p-3">
+              <button
+                type="button"
+                onClick={() => setShowMore(value => !value)}
+                aria-expanded={showMore}
+                aria-controls="sub-more-options"
+                className="flex items-center gap-1.5 self-start text-sm font-medium text-muted-foreground hover:text-foreground"
+              >
+                <ChevronDown className={`h-4 w-4 transition-transform ${showMore ? 'rotate-180' : ''}`} aria-hidden="true" />
+                More options
+              </button>
+            ) : null}
+
+            {supportsLifecycle && showMore ? (
+              <div id="sub-more-options" className="grid gap-4 rounded-xl border border-border p-3">
                 <div className="grid gap-1.5">
                   <Label htmlFor="sub-status">Payment status</Label>
                   <Select value={form.status} onValueChange={value => set('status', value as PaymentStatus)} disabled={loading}>
@@ -682,16 +700,18 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
                       <SelectItem value="ended">Ended</SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs leading-5 text-muted-foreground">
-                    Paused and finished payments stay in history without inflating current totals.
-                  </p>
                 </div>
 
                 {form.status === 'paused' ? (
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="sub-paused-until">Resume date <span className="font-normal text-muted-foreground">(optional)</span></Label>
-                    <Input id="sub-paused-until" type="date" min={addUtcDays(todayUtcDateKey(), 1)} value={form.paused_until} onChange={event => set('paused_until', event.target.value)} disabled={loading} />
-                  </div>
+                  <OptionalDateField
+                    id="sub-paused-until"
+                    label="Resume date"
+                    addLabel="Add a resume date"
+                    min={addUtcDays(todayUtcDateKey(), 1)}
+                    value={form.paused_until}
+                    onChange={value => set('paused_until', value)}
+                    disabled={loading}
+                  />
                 ) : null}
 
                 {form.status === 'cancelling' ? (
@@ -701,11 +721,14 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
                   </div>
                 ) : null}
 
-                <div className="grid gap-1.5">
-                  <Label htmlFor="sub-recurs-until">Stop recurring after <span className="font-normal text-muted-foreground">(optional)</span></Label>
-                  <Input id="sub-recurs-until" type="date" value={form.recurrence_end_at} onChange={event => set('recurrence_end_at', event.target.value)} disabled={loading} />
-                  <p className="text-xs leading-5 text-muted-foreground">Useful for instalments or contracts with a known final date.</p>
-                </div>
+                <OptionalDateField
+                  id="sub-recurs-until"
+                  label="Stop recurring after"
+                  addLabel="Add an end date"
+                  value={form.recurrence_end_at}
+                  onChange={value => set('recurrence_end_at', value)}
+                  disabled={loading}
+                />
               </div>
             ) : initialData && initialData.status !== 'active' ? (
               <p className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
@@ -716,7 +739,7 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
             {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
           </div>
 
-          <DialogFooter className="gap-2">
+          <DialogFooter className="sticky -bottom-4 z-10 gap-2 bg-popover">
             <Button type="button" variant="outline" onClick={handleClose} disabled={loading}>Cancel</Button>
             <Button type="submit" disabled={loading || capabilityState === 'loading'}>
               {loading ? (isEditing ? 'Saving…' : 'Adding…') : (isEditing ? 'Save changes' : 'Add payment')}
@@ -725,5 +748,70 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
         </form>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function OptionalDateField({
+  id,
+  label,
+  addLabel,
+  value,
+  onChange,
+  disabled,
+  min,
+}: {
+  id: string
+  label: string
+  addLabel: string
+  value: string
+  onChange: (value: string) => void
+  disabled?: boolean
+  min?: string
+}) {
+  const [adding, setAdding] = useState(false)
+
+  if (!value && !adding) {
+    return (
+      <button
+        type="button"
+        onClick={() => setAdding(true)}
+        disabled={disabled}
+        className="flex items-center gap-1.5 self-start text-sm font-medium text-primary hover:underline disabled:opacity-50"
+      >
+        <Plus className="h-4 w-4" aria-hidden="true" />
+        {addLabel}
+      </button>
+    )
+  }
+
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-baseline justify-between">
+        <Label htmlFor={id}>{label}</Label>
+        <button
+          type="button"
+          onClick={() => {
+            onChange('')
+            setAdding(false)
+          }}
+          disabled={disabled}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          Remove
+        </button>
+      </div>
+      <Input
+        id={id}
+        type="date"
+        min={min}
+        autoFocus={adding && !value}
+        value={value}
+        onChange={event => {
+          setAdding(true)
+          onChange(event.target.value)
+        }}
+        disabled={disabled}
+      />
+    </div>
   )
 }

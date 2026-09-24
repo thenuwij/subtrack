@@ -34,7 +34,7 @@ import {
   storedDateKey,
   todayUtcDateKey,
 } from '@/lib/utils/dates'
-import { getAccessToken } from '@/lib/auth/session'
+import { getAccessToken, useIsDemo } from '@/lib/auth/session'
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
@@ -87,6 +87,7 @@ export default function ReviewPage() {
   )
   const items = itemsQuery.data ?? []
   const gmail = gmailQuery.data ?? null
+  const isDemo = useIsDemo()
   const loading = itemsQuery.isLoading || gmailQuery.isLoading
   const loadError = [
     errorMessage(itemsQuery.error, 'Could not load inbox findings.'),
@@ -230,6 +231,17 @@ export default function ReviewPage() {
     setBusy(null)
   }
 
+  async function undoDismiss(id: string) {
+    try {
+      const t = await token()
+      if (!t) throw new Error('Your session has expired. Sign in again to continue.')
+      await restoreDetected(t, id)
+      void itemsQuery.mutate()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not restore this detection.')
+    }
+  }
+
   async function restore(id: string) {
     if (!beginBusy(id)) return
     try {
@@ -340,7 +352,9 @@ export default function ReviewPage() {
       await dismissDetected(t, id)
       // Drop it locally rather than refetching — the row is gone either way.
       removeItem(id)
-      toast.success('Detection dismissed')
+      toast.success('Detection dismissed', {
+        action: { label: 'Undo', onClick: () => void undoDismiss(id) },
+      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not dismiss this detection.')
     } finally {
@@ -403,13 +417,11 @@ export default function ReviewPage() {
 
         <section className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="space-y-2">
-            <p className="text-sm font-medium text-primary">From your inbox</p>
-            <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-              Review detections
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+              Inbox
             </h1>
             <p className="max-w-2xl text-sm text-muted-foreground">
-              Found in your email receipts. Nothing is added to your recurring payments
-              until you approve it.
+              Payments found in your email. Nothing is added until you approve it.
             </p>
           </div>
 
@@ -432,7 +444,7 @@ export default function ReviewPage() {
 
         {/* Dismissing is deliberately sticky — a rescan won't resurface it —
             so there has to be a way back to what you rejected. */}
-        {gmail?.connected && (
+        {(gmail?.connected || isDemo) && (
           <div className="flex gap-1 border-b border-border" role="tablist" aria-label="Review status">
             {([
               { key: 'pending', label: 'To review' },
@@ -460,7 +472,21 @@ export default function ReviewPage() {
           </div>
         )}
 
-        {gmail && !gmail.connected ? (
+        {isDemo ? (
+          <div className="rounded-2xl bg-card p-6 shadow-sm">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Mail className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-medium text-foreground">Sample inbox findings</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  In a real account these come from your Gmail receipts. Add or dismiss them to see how review works.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : gmail && !gmail.connected ? (
           <div className="rounded-2xl bg-card p-6 shadow-sm">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -825,9 +851,6 @@ export default function ReviewPage() {
                                 {item.amount_type === 'variable' ? 'Varies each bill' : 'Usually fixed'}
                               </p>
                             )}
-                            <p className="text-xs leading-5 text-muted-foreground">
-                              Variable bills appear as estimates in dashboard totals.
-                            </p>
                           </div>
                         </div>
                       ) : null}

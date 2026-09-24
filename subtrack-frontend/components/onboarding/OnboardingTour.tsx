@@ -17,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { getAccessToken } from '@/lib/auth/session'
+import { getAccessToken, isDemoSession } from '@/lib/auth/session'
 
 export const START_TOUR_EVENT = 'subtrack:start-tour'
 
@@ -25,6 +25,17 @@ function visible(selector: string) {
   return () => {
     const matches = Array.from(document.querySelectorAll(selector))
     return matches.find(element => (element as HTMLElement).offsetParent !== null) ?? matches[0]
+  }
+}
+
+function firstVisible(...selectors: string[]) {
+  return () => {
+    for (const selector of selectors) {
+      const match = Array.from(document.querySelectorAll(selector))
+        .find(element => (element as HTMLElement).offsetParent !== null)
+      if (match) return match
+    }
+    return document.body
   }
 }
 
@@ -51,20 +62,27 @@ const steps: DriveStep[] = [
     },
   },
   {
-    element: '[data-tour="assistant"]',
-    skipMissingElement: true,
+    element: firstVisible('[data-tour="assistant"]', '[data-tour="nav-assistant"]'),
     popover: {
       title: 'Ask the assistant',
       description: 'Ask questions in plain English. It can prepare changes for you, and nothing happens until you confirm.',
     },
   },
-  {
-    popover: {
-      title: 'You are all set',
-      description: 'Start by connecting Gmail in Account, or add your first payment. You can replay this tour from Account settings.',
-    },
-  },
 ]
+
+const finalStep: DriveStep = {
+  popover: {
+    title: 'You are all set',
+    description: 'Start by connecting Gmail in Account, or add your first payment. You can replay this tour from Account settings.',
+  },
+}
+
+const demoFinalStep: DriveStep = {
+  popover: {
+    title: 'You are all set',
+    description: 'Explore the sample payments, review the inbox findings, or ask the assistant a question. You can replay this tour from Account.',
+  },
+}
 
 async function markCompleted() {
   const accessToken = await getAccessToken()
@@ -87,7 +105,7 @@ export function OnboardingTour() {
   const startTour = useCallback(() => {
     setDismissed(true)
     const tour = driver({
-      steps,
+      steps: [...steps, isDemoSession() ? demoFinalStep : finalStep],
       showProgress: true,
       progressText: '{{current}} of {{total}}',
       nextBtnText: 'Next',

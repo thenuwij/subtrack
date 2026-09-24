@@ -59,3 +59,8 @@ function subscribe(callback: () => void) {
 export function useIsDemo(): boolean {
   return useSyncExternalStore(subscribe, isDemoSession, () => false)
 }
+
+export async function signOut(): Promise<void> {
+  endDemo()
+  await createClient().auth.signOut()
+}

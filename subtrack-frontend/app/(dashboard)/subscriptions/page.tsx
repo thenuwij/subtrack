@@ -300,10 +300,11 @@ export default function SubscriptionsPage() {
     0,
   )
   const filteredUnavailable = filteredContributing.length - filteredConvertible.length
-  const totalLabel  = filtered.length > 0
+  const filtersActive = Boolean(search || selectedCategory || period !== 'all')
+  const totalLabel  = filtered.length > 0 && (filtersActive || filteredUnavailable > 0)
     ? ratesLoading
       ? `${filtered.length} item${filtered.length !== 1 ? 's' : ''} · updating exchange rates…`
-      : `${filtered.length} item${filtered.length !== 1 ? 's' : ''} · ${formatCurrency(totalAmount, baseCurrency)}/mo current commitment${filteredUnavailable ? ` · ${filteredUnavailable} excluded (FX unavailable)` : ''}`
+      : `${filtered.length} item${filtered.length !== 1 ? 's' : ''} · ${formatCurrency(totalAmount, baseCurrency)}/mo${filteredUnavailable ? ` · ${filteredUnavailable} excluded (FX unavailable)` : ''}`
     : ''
 
   const scopeCounts: Record<RecordScope, number> = {
@@ -450,7 +451,7 @@ export default function SubscriptionsPage() {
             Possible duplicate payment: {pair.keep.name} and {pair.merge.name}
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {pair.reason} Keeping both may double-count this recurring commitment.
+            {pair.reason}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button size="sm" onClick={() => handleMerge(pair)} disabled={merging !== null || dismissingDuplicate !== null}>

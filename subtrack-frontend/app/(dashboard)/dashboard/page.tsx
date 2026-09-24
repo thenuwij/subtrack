@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import {
   dismissReminder,
+  restoreReminder,
   getDetected,
   getGmailStatus,
   getPreferences,
@@ -50,7 +51,7 @@ import { UpcomingCharges } from '@/components/dashboard/UpcomingCharges'
 import { NeedsAttention } from '@/components/dashboard/NeedsAttention'
 import { GettingStarted } from '@/components/onboarding/GettingStarted'
 import { apiKeys, errorMessage, useApi } from '@/lib/hooks/useApi'
-import { getAccessToken } from '@/lib/auth/session'
+import { getAccessToken, useIsDemo } from '@/lib/auth/session'
 
 function formatDate(date: string) {
   return new Date(date).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
@@ -74,7 +75,7 @@ export default function DashboardPage() {
     apiKeys.reminders(90), token => getReminders(token, { horizonDays: 90 }),
   )
   const forecastQuery = useApi<SubscriptionForecast>(
-    apiKeys.forecast(30), token => getSubscriptionForecast(token, 30),
+    apiKeys.forecast(14), token => getSubscriptionForecast(token, 14),
   )
   const detectionsQuery = useApi<DetectedSubscription[]>(
     apiKeys.detected('pending'), token => getDetected(token, 'pending'),
@@ -92,6 +93,7 @@ export default function DashboardPage() {
   const pendingDetections = useMemo(() => detectionsQuery.data ?? [], [detectionsQuery.data])
   const monthlyIncome = preferencesQuery.data?.monthly_income ?? null
   const gmail = gmailQuery.data ?? null
+  const isDemo = useIsDemo()
   const forecast = forecastQuery.data ?? null
 
   const loadError = errorMessage(subscriptionsQuery.error, 'Could not load recurring payments.')
@@ -167,17 +169,6 @@ export default function DashboardPage() {
   const shareOfIncome =
     monthlyIncome && monthlyIncome > 0 ? (monthlyTotal / monthlyIncome) * 100 : null
 
-  const convertibleChanges = useMemo(
-    () => changes.filter(change => canConvert(change.currency)),
-    [changes, canConvert],
-  )
-  const netChange = useMemo(
-    () => convertibleChanges.reduce(
-      (sum, change) => sum + (convertAmount(change.delta, change.currency) ?? 0), 0,
-    ),
-    [convertibleChanges, convertAmount]
-  )
-
   // The hero bar, in the same colours as the breakdown below it, so the two
   // read as one system rather than two unrelated charts.
   const heroSegments = useMemo(() => {
@@ -203,9 +194,22 @@ export default function DashboardPage() {
         current => current?.filter(reminder => reminder.id !== id),
         { revalidate: false },
       )
-      toast.success('Reminder dismissed')
+      toast.success('Reminder dismissed', {
+        action: { label: 'Undo', onClick: () => void handleUndoDismissReminder(id) },
+      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not dismiss reminder.')
+    }
+  }
+
+  async function handleUndoDismissReminder(id: string) {
+    try {
+      const accessToken = await getAccessToken()
+      if (!accessToken) throw new Error('Your session has expired.')
+      await restoreReminder(accessToken, id)
+      void remindersQuery.mutate()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not restore reminder.')
     }
   }
 
@@ -409,7 +413,7 @@ export default function DashboardPage() {
         />
 
         {/* ── Inbox nudge — only while there's something to act on ─────── */}
-        {gmail && !gmail.connected && (
+        {gmail && !gmail.connected && !isDemo && (
           <section className="flex flex-col gap-4 rounded-2xl bg-card p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-start gap-3">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -448,21 +452,9 @@ export default function DashboardPage() {
             <div>
               <h2 className="text-base font-semibold text-foreground">What changed</h2>
               <p className="mt-0.5 text-sm text-muted-foreground">
-                Additions, price changes, and payments removed in the last 30 days.
+                Last 30 days
               </p>
             </div>
-            {convertibleChanges.length > 0 && netChange !== 0 && (
-              <div className="shrink-0 text-right">
-                <p
-                  className="text-sm font-semibold tabular-nums"
-                  style={{ color: netChange > 0 ? 'var(--increase)' : 'var(--decrease)' }}
-                >
-                  {netChange > 0 ? '+' : '−'}
-                  {formatCurrency(Math.abs(netChange), baseCurrency)}
-                </p>
-                <p className="text-xs text-muted-foreground">net per month</p>
-              </div>
-            )}
           </div>
 
           {changesError ? (
@@ -563,7 +555,7 @@ export default function DashboardPage() {
           )}
           {!ratesLoading && changes.some(change => change.currency !== baseCurrency) ? (
             <p className="mt-3 text-xs leading-5 text-muted-foreground">
-              Foreign-currency changes are re-expressed using the currently loaded FX snapshot, so the displayed base-currency net can move with rates. Recorded native amounts do not change.
+              Foreign amounts use today&apos;s exchange rates.
             </p>
           ) : null}
         </section>

@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     token_encryption_key: str = ""
     demo_token_secret: str = ""
     demo_session_hours: int = Field(default=24, ge=1, le=72)
-    demo_sessions_per_client_per_hour: int = Field(default=5, ge=1, le=100)
+    demo_sessions_per_client_per_hour: int = Field(default=15, ge=1, le=100)
     demo_sessions_per_hour: int = Field(default=200, ge=1, le=10_000)
     demo_agent_messages: int = Field(default=20, ge=1, le=200)
 
