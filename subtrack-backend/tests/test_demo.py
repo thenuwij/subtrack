@@ -18,7 +18,14 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
 from app.config import settings  # noqa: E402
 from app.database import Base  # noqa: E402
 from app.middleware import auth  # noqa: E402
-from app.models import DemoSession  # noqa: E402
+from app.models import (  # noqa: E402
+    DemoSession,
+    DetectedSubscription,
+    PaymentReminder,
+    Subscription,
+    SubscriptionChange,
+    UserPreference,
+)
 from app.routers.demo import create_demo_session  # noqa: E402
 
 DEMO_SECRET = "demo-secret-" + "x" * 60
@@ -141,6 +148,60 @@ class DemoSessionTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as caught:
                 create_demo_session(request_from("198.51.100.3"), self.db)
         self.assertEqual(caught.exception.status_code, 429)
+
+    def test_new_demo_is_seeded_with_realistic_data(self):
+        with patch.object(settings, "demo_token_secret", DEMO_SECRET):
+            result = create_demo_session(request_from("198.51.100.1"), self.db)
+            user_id = auth.verify_token(credentials(result["access_token"]))
+
+        subs = self.db.query(Subscription).filter(Subscription.user_id == user_id).all()
+        names = {sub.name for sub in subs}
+        self.assertEqual(len(subs), 13)
+        self.assertIn("Spotify Premium", names)
+        self.assertNotIn("Kayo Sports", names)
+        self.assertEqual(
+            next(sub for sub in subs if sub.name == "Aussie Broadband").amount, 89,
+        )
+        kinds = sorted(
+            change.kind.value
+            for change in self.db.query(SubscriptionChange).filter(
+                SubscriptionChange.user_id == user_id,
+            )
+        )
+        self.assertEqual(kinds, ["added", "price_change", "removed"])
+        self.assertEqual(
+            self.db.query(DetectedSubscription).filter(
+                DetectedSubscription.user_id == user_id,
+            ).count(),
+            3,
+        )
+        reminder_kinds = {
+            reminder.kind for reminder in self.db.query(PaymentReminder).filter(
+                PaymentReminder.user_id == user_id,
+            )
+        }
+        self.assertEqual(reminder_kinds, {"renewal", "trial_end"})
+        preference = self.db.get(UserPreference, user_id)
+        self.assertIsNone(preference.onboarding_completed_at)
+        self.assertEqual(preference.monthly_income, 6500)
+
+    def test_expired_demos_are_purged_when_a_new_demo_starts(self):
+        with patch.object(settings, "demo_token_secret", DEMO_SECRET):
+            first = create_demo_session(request_from("198.51.100.1"), self.db)
+            old_user = auth.verify_token(credentials(first["access_token"]))
+            self.db.query(DemoSession).filter(
+                DemoSession.demo_user_id == old_user,
+            ).update({"expires_at": datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)})
+            self.db.commit()
+            create_demo_session(request_from("198.51.100.2"), self.db)
+
+        self.assertIsNone(self.db.get(DemoSession, old_user))
+        for model in (Subscription, SubscriptionChange, DetectedSubscription, PaymentReminder):
+            self.assertEqual(
+                self.db.query(model).filter(model.user_id == old_user).count(), 0,
+            )
+        self.assertIsNone(self.db.get(UserPreference, old_user))
+        self.assertEqual(self.db.query(DemoSession).count(), 1)
 
 
 if __name__ == "__main__":

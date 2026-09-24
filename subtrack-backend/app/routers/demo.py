@@ -11,6 +11,7 @@ from app.config import settings
 from app.database import get_db
 from app.middleware.auth import DEMO_USER_PREFIX, issue_demo_token
 from app.models import DemoSession
+from app.services.demo import purge_expired_demos, seed_demo_user
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ def create_demo_session(request: Request, db: Session = Depends(get_db)):
     if not settings.demo_token_secret:
         raise HTTPException(status_code=404, detail="The demo is not available right now.")
 
+    purge_expired_demos(db)
     now = _utcnow()
     hour_ago = now - timedelta(hours=1)
     client_hash = _client_hash(request)
@@ -68,6 +70,7 @@ def create_demo_session(request: Request, db: Session = Depends(get_db)):
         expires_at=expires_at,
     ))
     db.commit()
+    seed_demo_user(db, user_id)
     logger.info("Demo session created")
     return {
         "access_token": issue_demo_token(user_id, expires_at),
