@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowUpRight, Check, Clock3, Mail, RotateCcw, X } from 'lucide-react'
+import { ArrowUpRight, Check, Clock3, Mail, RotateCcw, Trash2, X } from 'lucide-react'
 import {
   approveDetected,
+  clearAllDismissedDetected,
+  clearDismissedDetected,
   dismissDetected,
   getDetected,
   getGmailStatus,
@@ -14,6 +16,14 @@ import {
 import type { DetectedSubscription, GmailStatus } from '@/types'
 import { formatCurrency } from '@/lib/utils/currency'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -102,6 +112,7 @@ export default function ReviewPage() {
   const [dueDates, setDueDates] = useState<Record<string, string>>({})
   const [amountTypes, setAmountTypes] = useState<Record<string, AmountType>>({})
   const [rescanStarting, setRescanStarting] = useState(false)
+  const [clearAllOpen, setClearAllOpen] = useState(false)
   const busyRef = useRef(false)
   const rescanRef = useRef(false)
 
@@ -252,6 +263,37 @@ export default function ReviewPage() {
       toast.success('Detection restored')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not restore this detection.')
+    } finally {
+      endBusy()
+    }
+  }
+
+  async function clearOne(id: string) {
+    if (!beginBusy(id)) return
+    try {
+      const t = await token()
+      if (!t) throw new Error('Your session has expired. Sign in again to continue.')
+      await clearDismissedDetected(t, id)
+      removeItem(id)
+      toast.success('Cleared. A future scan may suggest it again.')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not clear this detection.')
+    } finally {
+      endBusy()
+    }
+  }
+
+  async function clearAll() {
+    if (!beginBusy('clear-all')) return
+    try {
+      const t = await token()
+      if (!t) throw new Error('Your session has expired. Sign in again to continue.')
+      const { cleared } = await clearAllDismissedDetected(t)
+      void itemsQuery.mutate([], { revalidate: false })
+      setClearAllOpen(false)
+      toast.success(`Cleared ${cleared} dismissed ${cleared === 1 ? 'item' : 'items'}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not clear dismissed detections.')
     } finally {
       endBusy()
     }
@@ -516,6 +558,24 @@ export default function ReviewPage() {
 
         {gmail && (scanning || gmail.scan_partial) && (
           <GmailScanProgress gmail={gmail} />
+        )}
+
+        {tab === 'dismissed' && items.length > 0 && (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              {items.length} dismissed {items.length === 1 ? 'item' : 'items'}
+            </p>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setClearAllOpen(true)}
+              disabled={busy !== null}
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 className="mr-1 h-3.5 w-3.5" />
+              Clear all
+            </Button>
+          </div>
         )}
 
         {items.length === 0 && !scanning && gmail?.connected ? (
@@ -1049,15 +1109,28 @@ export default function ReviewPage() {
 
                     <div className="flex shrink-0 gap-2">
                       {tab === 'dismissed' ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => restore(item.id)}
-                          disabled={busy !== null}
-                        >
-                          <RotateCcw className="mr-1 h-3.5 w-3.5" />
-                          Restore
-                        </Button>
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => restore(item.id)}
+                            disabled={busy !== null}
+                          >
+                            <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                            Restore
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => clearOne(item.id)}
+                            disabled={busy !== null}
+                            aria-label={`Clear ${item.merchant}`}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="mr-1 h-3.5 w-3.5" />
+                            Clear
+                          </Button>
+                        </>
                       ) : (
                         <>
                           {approvePossible ? (
@@ -1096,10 +1169,45 @@ export default function ReviewPage() {
 
         {items.length > 0 && (
           <p className="text-xs text-muted-foreground">
-            Dismissed items won&apos;t be suggested again on future scans.
+            {tab === 'dismissed'
+              ? "Dismissed items won't be suggested again on future scans. Cleared items may be."
+              : "Dismissed items won't be suggested again on future scans."}
           </p>
         )}
       </div>
+
+      <Dialog
+        open={clearAllOpen}
+        onOpenChange={open => {
+          if (busy === 'clear-all') return
+          setClearAllOpen(open)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Clear all dismissed items?</DialogTitle>
+            <DialogDescription>
+              This permanently removes {items.length} dismissed {items.length === 1 ? 'item' : 'items'}. If those payments still appear in your email, a future scan may suggest them again.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setClearAllOpen(false)}
+              disabled={busy === 'clear-all'}
+            >
+              Keep them
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={clearAll}
+              disabled={busy === 'clear-all'}
+            >
+              {busy === 'clear-all' ? 'Clearing…' : 'Clear all'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

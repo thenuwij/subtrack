@@ -530,3 +530,36 @@ def restore(
     detection.resolved_at = None
     db.commit()
     return {"restored": True}
+
+
+@router.delete("/dismissed")
+def clear_dismissed(
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    cleared = db.query(DetectedSubscription).filter(
+        DetectedSubscription.user_id == user_id,
+        DetectedSubscription.status == DetectionStatus.dismissed,
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"cleared": cleared}
+
+
+@router.delete("/{detection_id}")
+def clear_one_dismissed(
+    detection_id: UUID,
+    user_id: str = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    detection = db.query(DetectedSubscription).filter(
+        DetectedSubscription.id == detection_id,
+        DetectedSubscription.user_id == user_id,
+    ).first()
+    if not detection:
+        raise HTTPException(status_code=404, detail="Detection not found")
+    if detection.status != DetectionStatus.dismissed:
+        raise HTTPException(status_code=409, detail="Only dismissed detections can be cleared")
+
+    db.delete(detection)
+    db.commit()
+    return {"cleared": 1}
