@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { PublicFooter } from '@/components/layout/PublicFooter'
 
 export const metadata: Metadata = {
-  title: 'Subtrack — Talk to your recurring payments',
+  title: 'Subtrack',
   description: 'Track recurring payments and free trials, set reminders, and ask a page-aware AI assistant about your spending.',
 }
 
