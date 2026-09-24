@@ -53,18 +53,18 @@ services:
         sync: false
       # This exact URL must also be registered in Google Console under
       # Credentials -> your OAuth client -> Authorised redirect URIs.
-      # e.g. https://subtrack-api.onrender.com/gmail/callback
+      # e.g. https://subtrack-api.twij.app/gmail/callback
       - key: GOOGLE_REDIRECT_URI
         sync: false
 
       # The frontend origin. CORS blocks every request if this is wrong, and
       # the Gmail callback redirects back to the first entry.
       - key: ALLOWED_ORIGINS
-        value: https://subtrack-beryl.vercel.app
+        value: https://subtrack.twij.app,https://subtrack-beryl.vercel.app
       # Canonical browser URL for redirects and public links. Unlike the CORS
       # setting above, this must always contain exactly one origin.
       - key: FRONTEND_URL
-        value: https://subtrack-beryl.vercel.app
+        value: https://subtrack.twij.app
 
       - key: ENVIRONMENT
         value: production
