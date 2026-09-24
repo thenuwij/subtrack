@@ -97,6 +97,26 @@ class AgentResearchTests(unittest.TestCase):
         self.assertEqual(search.call_count, 1)
         self.assertEqual(self.db.query(AgentResearchCache).count(), 1)
 
+    def test_personal_details_never_reach_the_search_provider(self):
+        payment = Subscription(
+            id=uuid4(), user_id="owner", name="Rent - 12/34 Example Street",
+            category=Category.housing, amount=550, currency="AUD",
+            cycle=BillingCycle.weekly, is_active=True,
+        )
+        self.db.add(payment)
+        self.db.commit()
+        response = SimpleNamespace(stop_reason="end_turn", content=[])
+        with patch("app.agent.research.client.messages.create", return_value=response) as create:
+            research_alternatives(self.db, "owner", {
+                "subscription_id": str(payment.id),
+                "market": None,
+                "requirements": "Near 0412 345 678, email me at jane@example.com",
+            })
+        sent = str(create.call_args)
+        for secret in ("12/34 Example Street", "0412 345 678", "jane@example.com"):
+            self.assertNotIn(secret, sent)
+        self.assertIn("Rent", sent)
+
     def test_hourly_limit_does_not_call_the_provider(self):
         for index in range(5):
             self.db.add(AgentResearchCache(

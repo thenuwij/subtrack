@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.gmail.redaction import redact
 from app.models import AgentResearchCache, Subscription
 from app.services.recurrence import cadence_for, cadence_label
 from app.services.schedules import utc_naive
@@ -193,7 +194,7 @@ def _run_search(payment: Subscription, market: str, requirements: str | None) ->
     today = utcnow().date().isoformat()
     cadence = cadence_for(payment)
     payment_data = {
-        "name": payment.name,
+        "name": redact(payment.name),
         "category": _enum(payment.category),
         "current_price": payment.amount,
         "currency": payment.currency,
@@ -202,7 +203,7 @@ def _run_search(payment: Subscription, market: str, requirements: str | None) ->
         "interval_count": cadence.count,
         "is_active_trial": active_trial(payment),
         "market": market,
-        "requirements": requirements,
+        "requirements": redact(requirements) if requirements else requirements,
     }
     messages: list[dict] = [{
         "role": "user",
