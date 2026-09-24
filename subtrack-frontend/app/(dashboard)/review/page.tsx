@@ -34,7 +34,7 @@ import {
   storedDateKey,
   todayUtcDateKey,
 } from '@/lib/utils/dates'
-import { getAccessToken } from '@/lib/auth/session'
+import { getAccessToken, useIsDemo } from '@/lib/auth/session'
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
@@ -87,6 +87,7 @@ export default function ReviewPage() {
   )
   const items = itemsQuery.data ?? []
   const gmail = gmailQuery.data ?? null
+  const isDemo = useIsDemo()
   const loading = itemsQuery.isLoading || gmailQuery.isLoading
   const loadError = [
     errorMessage(itemsQuery.error, 'Could not load inbox findings.'),
@@ -445,7 +446,7 @@ export default function ReviewPage() {
 
         {/* Dismissing is deliberately sticky — a rescan won't resurface it —
             so there has to be a way back to what you rejected. */}
-        {gmail?.connected && (
+        {(gmail?.connected || isDemo) && (
           <div className="flex gap-1 border-b border-border" role="tablist" aria-label="Review status">
             {([
               { key: 'pending', label: 'To review' },
@@ -473,7 +474,21 @@ export default function ReviewPage() {
           </div>
         )}
 
-        {gmail && !gmail.connected ? (
+        {isDemo ? (
+          <div className="rounded-2xl bg-card p-6 shadow-sm">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Mail className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-medium text-foreground">Sample inbox findings</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  In a real account these come from your Gmail receipts. Add or dismiss them to see how review works.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : gmail && !gmail.connected ? (
           <div className="rounded-2xl bg-card p-6 shadow-sm">
             <div className="flex items-start gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
