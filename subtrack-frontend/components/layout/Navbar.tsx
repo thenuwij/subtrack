@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { LayoutDashboard, CreditCard, LogOut, UserCircle, MailCheck, Sparkles } from 'lucide-react'
 import { getDetected, getGmailStatus } from '@/lib/api'
 import { apiKeys, useApi } from '@/lib/hooks/useApi'
+import { endDemo } from '@/lib/auth/session'
 import type { GmailStatus } from '@/types'
 import { Logo, LogoMark } from '@/components/layout/Logo'
 
@@ -25,6 +26,7 @@ export default function Navbar() {
   const gmailConnected = gmail.data ? gmail.data.connected : null
 
   async function handleLogout() {
+    endDemo()
     await createClient().auth.signOut()
     router.push('/login')
   }

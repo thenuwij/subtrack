@@ -1,7 +1,7 @@
 'use client'
 
 import useSWR, { type SWRConfiguration } from 'swr'
-import { createClient } from '@/lib/supabase/client'
+import { getAccessToken } from '@/lib/auth/session'
 
 export const apiKeys = {
   detected: (status: 'pending' | 'dismissed') => `detected:${status}`,
@@ -21,9 +21,9 @@ export function errorMessage(error: unknown, fallback: string) {
 }
 
 async function accessToken() {
-  const { data: { session } } = await createClient().auth.getSession()
-  if (!session) throw new Error('Your session has expired. Sign in again.')
-  return session.access_token
+  const accessToken = await getAccessToken()
+  if (!accessToken) throw new Error('Your session has expired. Sign in again.')
+  return accessToken
 }
 
 export function useApi<T>(

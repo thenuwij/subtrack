@@ -6,7 +6,6 @@ import 'driver.js/dist/driver.css'
 import { useSWRConfig } from 'swr'
 import { getPreferences, updatePreferences } from '@/lib/api'
 import { apiKeys, useApi } from '@/lib/hooks/useApi'
-import { createClient } from '@/lib/supabase/client'
 import type { Preferences } from '@/types'
 import { LogoMark } from '@/components/layout/Logo'
 import { Button } from '@/components/ui/button'
@@ -18,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { getAccessToken } from '@/lib/auth/session'
 
 export const START_TOUR_EVENT = 'subtrack:start-tour'
 
@@ -67,9 +67,9 @@ const steps: DriveStep[] = [
 ]
 
 async function markCompleted() {
-  const { data: { session } } = await createClient().auth.getSession()
-  if (!session) return
-  await updatePreferences(session.access_token, { onboarding_completed: true })
+  const accessToken = await getAccessToken()
+  if (!accessToken) return
+  await updatePreferences(accessToken, { onboarding_completed: true })
 }
 
 export function OnboardingTour() {

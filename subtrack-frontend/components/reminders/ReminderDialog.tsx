@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Bell, LoaderCircle, Trash2 } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 import {
   createReminder,
   deleteReminder,
@@ -39,6 +38,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { getAccessToken } from '@/lib/auth/session'
 
 
 const KIND_LABEL: Record<ReminderKind, string> = {
@@ -61,9 +61,9 @@ function formatDate(value: string | null) {
 }
 
 async function accessToken() {
-  const { data: { session } } = await createClient().auth.getSession()
-  if (!session) throw new Error('Your session has expired. Please sign in again.')
-  return session.access_token
+  const accessToken = await getAccessToken()
+  if (!accessToken) throw new Error('Your session has expired. Please sign in again.')
+  return accessToken
 }
 
 interface ReminderDialogProps {

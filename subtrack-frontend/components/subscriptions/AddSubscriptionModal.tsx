@@ -19,7 +19,6 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useCurrency } from '@/lib/context/currency'
 import { getCapabilities, getSubscriptionEquivalents } from '@/lib/api'
-import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/utils/currency'
 import { CATEGORIES, formatCategory } from '@/lib/utils/categories'
 import {
@@ -34,6 +33,7 @@ import {
   storedDateKey,
   todayUtcDateKey,
 } from '@/lib/utils/dates'
+import { getAccessToken } from '@/lib/auth/session'
 
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
 const RECURRENCE_UNITS: RecurrenceUnit[] = ['day', 'week', 'month', 'year']
@@ -151,9 +151,9 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
     let cancelled = false
     async function loadCapabilities() {
       try {
-        const { data: { session } } = await createClient().auth.getSession()
-        if (!session) throw new Error('Your session has expired.')
-        const next = await getCapabilities(session.access_token)
+        const accessToken = await getAccessToken()
+        if (!accessToken) throw new Error('Your session has expired.')
+        const next = await getCapabilities(accessToken)
         if (!cancelled) {
           setCapabilities(next)
           setCapabilityState('ready')
@@ -210,9 +210,9 @@ function OpenSubscriptionModal({ onClose, onSubmit, initialData }: Props) {
     let cancelled = false
     const timer = window.setTimeout(async () => {
       try {
-        const { data: { session } } = await createClient().auth.getSession()
-        if (!session) throw new Error('Your session has expired.')
-        const preview = await getSubscriptionEquivalents(session.access_token, {
+        const accessToken = await getAccessToken()
+        if (!accessToken) throw new Error('Your session has expired.')
+        const preview = await getSubscriptionEquivalents(accessToken, {
           amount: myAmount,
           interval_unit: form.interval_unit,
           interval_count: intervalCount,

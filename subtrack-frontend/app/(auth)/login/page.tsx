@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { LogoMark } from '@/components/layout/Logo'
 import { useHydrated } from '@/lib/hooks/useHydrated'
@@ -8,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { authErrorMessage, passwordProblem } from '@/lib/auth/errors'
+import { endDemo, startDemo } from '@/lib/auth/session'
 
 const POINTS = [
   {
@@ -28,10 +30,11 @@ type Mode = 'signin' | 'signup'
 
 export default function LoginPage() {
   const supabase = createClient()
+  const router = useRouter()
   const [mode, setMode] = useState<Mode>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [busy, setBusy] = useState<'email' | 'google' | null>(null)
+  const [busy, setBusy] = useState<'email' | 'google' | 'demo' | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Set when a sign-up needs the emailed confirmation link before it has a
   // session. Whether that step exists at all is a Supabase project setting,
@@ -57,6 +60,7 @@ export default function LoginPage() {
   async function handleEmailSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError(null)
+    endDemo()
 
     if (mode === 'signup') {
       const problem = passwordProblem(password)
@@ -104,9 +108,22 @@ export default function LoginPage() {
     }
   }
 
+  async function handleDemo() {
+    setBusy('demo')
+    setError(null)
+    try {
+      await startDemo()
+      router.push('/dashboard')
+    } catch (demoError) {
+      setError(demoError instanceof Error ? demoError.message : 'The demo could not be started.')
+      setBusy(null)
+    }
+  }
+
   async function handleGoogleLogin() {
     setBusy('google')
     setError(null)
+    endDemo()
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
@@ -260,6 +277,15 @@ export default function LoginPage() {
                     Continue with Google
                   </>
                 )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void handleDemo()}
+                disabled={busy !== null}
+                className="mt-3 w-full rounded-xl px-6 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-60"
+              >
+                {busy === 'demo' ? 'Setting up your demo…' : 'Just looking? Try the demo with sample data →'}
               </button>
 
               {error && (

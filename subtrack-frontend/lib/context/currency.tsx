@@ -1,9 +1,9 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
 import { getPreferences, updatePreferences, getRates } from '@/lib/api'
 import type { Currency, Preferences } from '@/types'
+import { getAccessToken } from '@/lib/auth/session'
 
 interface CurrencyUpdateResult {
   preferences: Preferences
@@ -86,16 +86,15 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     async function load() {
       try {
-        const supabase = createClient()
-        const { data: { session } } = await supabase.auth.getSession()
-        if (!session) {
+        const accessToken = await getAccessToken()
+        if (!accessToken) {
           setRatesLoading(false)
           return
         }
 
-        const pref = await getPreferences(session.access_token)
+        const pref = await getPreferences(accessToken)
         setBaseCurrencyState(pref.base_currency)
-        await fetchRates(pref.base_currency, session.access_token)
+        await fetchRates(pref.base_currency, accessToken)
       } catch {
         // Keep the AUD fallback. Consumers can distinguish unavailable rates
         // with canConvert instead of silently treating currencies as 1:1.
@@ -118,9 +117,8 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
         ratesAvailable: Object.keys(rates).length > 0,
       }
     }
-    const supabase = createClient()
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) throw new Error('Your session has expired.')
+    const accessToken = await getAccessToken()
+    if (!accessToken) throw new Error('Your session has expired.')
 
     setIsUpdating(true)
     try {
@@ -128,7 +126,7 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
       // its matching rate table instead of displaying mathematically invalid
       // conversions from mixed bases.
       const preferences = await updatePreferences(
-        session.access_token,
+        accessToken,
         { base_currency: currency },
       )
       setBaseCurrencyState(currency)
@@ -139,7 +137,7 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
       ratesFetchedFor.current = null
       let ratesAvailable = true
       try {
-        await fetchRates(currency, session.access_token)
+        await fetchRates(currency, accessToken)
       } catch {
         ratesAvailable = false
       }

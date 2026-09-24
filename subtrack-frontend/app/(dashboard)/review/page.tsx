@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ArrowUpRight, Check, Clock3, Mail, RotateCcw, X } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 import {
   approveDetected,
   dismissDetected,
@@ -35,6 +34,7 @@ import {
   storedDateKey,
   todayUtcDateKey,
 } from '@/lib/utils/dates'
+import { getAccessToken } from '@/lib/auth/session'
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-muted ${className ?? ''}`} />
@@ -67,8 +67,8 @@ function preservedSplitAmount(
 }
 
 async function token() {
-  const { data: { session } } = await createClient().auth.getSession()
-  return session?.access_token ?? null
+  const accessToken = await getAccessToken()
+  return accessToken
 }
 
 export default function ReviewPage() {

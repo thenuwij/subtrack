@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { getAccessToken, useIsDemo } from '@/lib/auth/session'
 
 const CURRENCIES: Currency[] = ['AUD', 'USD', 'GBP', 'SGD', 'EUR', 'JPY']
 /** Keyed by the code the Gmail callback forwards: Google's own OAuth error,
@@ -81,6 +82,7 @@ export default function AccountPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [deleteBusy, setDeleteBusy] = useState(false)
+  const isDemo = useIsDemo()
   const { baseCurrency, setBaseCurrency, isLoading, isUpdating: currencyUpdating } = useCurrency()
 
   useEffect(() => {
@@ -88,10 +90,10 @@ export default function AccountPage() {
     supabase.auth.getUser().then(({ data }) => setUser(data.user))
 
     async function loadIncome() {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) return
+      const accessToken = await getAccessToken()
+      if (!accessToken) return
       try {
-        const prefs = await getPreferences(session.access_token)
+        const prefs = await getPreferences(accessToken)
         if (!incomeEdited.current
             && prefs.monthly_income !== null && prefs.monthly_income !== undefined) {
           setIncome(String(prefs.monthly_income))
@@ -125,11 +127,11 @@ export default function AccountPage() {
   }, [])
 
   async function withToken<T>(fn: (token: string) => Promise<T>) {
-    const { data: { session } } = await createClient().auth.getSession()
-    if (!session) return
+    const accessToken = await getAccessToken()
+    if (!accessToken) return
     setGmailBusy(true)
     try {
-      return await fn(session.access_token)
+      return await fn(accessToken)
     } finally {
       setGmailBusy(false)
     }
@@ -200,9 +202,9 @@ export default function AccountPage() {
 
     setIncomeStatus('saving')
     try {
-      const { data: { session } } = await createClient().auth.getSession()
-      if (!session) throw new Error('Your session has expired.')
-      await updatePreferences(session.access_token, { monthly_income: value })
+      const accessToken = await getAccessToken()
+      if (!accessToken) throw new Error('Your session has expired.')
+      await updatePreferences(accessToken, { monthly_income: value })
       incomeEdited.current = false
       setHasSavedIncome(true)
       setIncomeStatus('saved')
@@ -246,9 +248,9 @@ export default function AccountPage() {
   async function handleClearIncome() {
     setIncomeStatus('saving')
     try {
-      const { data: { session } } = await createClient().auth.getSession()
-      if (!session) throw new Error('Your session has expired.')
-      await updatePreferences(session.access_token, { monthly_income: null })
+      const accessToken = await getAccessToken()
+      if (!accessToken) throw new Error('Your session has expired.')
+      await updatePreferences(accessToken, { monthly_income: null })
       setIncome('')
       incomeEdited.current = false
       setHasSavedIncome(false)
@@ -269,9 +271,9 @@ export default function AccountPage() {
   async function handleExport() {
     setExportBusy(true)
     try {
-      const { data: { session } } = await createClient().auth.getSession()
-      if (!session) throw new Error('Your session has expired.')
-      const { blob, filename } = await downloadAccountExport(session.access_token)
+      const accessToken = await getAccessToken()
+      if (!accessToken) throw new Error('Your session has expired.')
+      const { blob, filename } = await downloadAccountExport(accessToken)
       const href = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = href
@@ -294,9 +296,9 @@ export default function AccountPage() {
     const supabase = createClient()
     let gmailRevocationFailed = false
     try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) throw new Error('Your session has expired.')
-      const result = await deleteAccountData(session.access_token, DELETE_CONFIRMATION)
+      const accessToken = await getAccessToken()
+      if (!accessToken) throw new Error('Your session has expired.')
+      const result = await deleteAccountData(accessToken, DELETE_CONFIRMATION)
       gmailRevocationFailed = result.gmail_revocation === 'failed'
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Your data was not deleted.')
@@ -324,8 +326,8 @@ export default function AccountPage() {
 
   const meta       = user?.user_metadata ?? {}
   const avatarUrl  = meta.avatar_url as string | undefined
-  const fullName   = (meta.full_name ?? meta.name ?? '') as string
-  const email      = user?.email ?? ''
+  const fullName   = (meta.full_name ?? meta.name ?? (isDemo ? 'Demo user' : '')) as string
+  const email      = user?.email ?? (isDemo ? 'Sample data, reset after 24 hours' : '')
   const initials   = fullName
     .split(' ')
     .map((n: string) => n[0])

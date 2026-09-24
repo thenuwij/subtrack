@@ -31,7 +31,6 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 import {
   confirmAgentAction,
   createAgentThread,
@@ -66,6 +65,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { getAccessToken } from '@/lib/auth/session'
 
 
 const ACTIVE_THREAD_KEY = 'subtrack:agent-active-thread'
@@ -176,9 +176,9 @@ const MessageMarkdown = memo(function MessageMarkdown({ content }: { content: st
 })
 
 async function accessToken() {
-  const { data: { session } } = await createClient().auth.getSession()
-  if (!session) throw new Error('Your session has expired. Please sign in again.')
-  return session.access_token
+  const accessToken = await getAccessToken()
+  if (!accessToken) throw new Error('Your session has expired. Please sign in again.')
+  return accessToken
 }
 
 export function AgentWorkspace({
