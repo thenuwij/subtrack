@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import Link from 'next/link'
+import { ArrowRight, Check, Sparkles } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { LogoMark } from '@/components/layout/Logo'
@@ -36,6 +37,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState<'email' | 'google' | 'demo' | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [demoError, setDemoError] = useState<string | null>(null)
   // Set when a sign-up needs the emailed confirmation link before it has a
   // session. Whether that step exists at all is a Supabase project setting,
   // so both outcomes are handled rather than assumed.
@@ -111,11 +113,12 @@ export default function LoginPage() {
   async function handleDemo() {
     setBusy('demo')
     setError(null)
+    setDemoError(null)
     try {
       await startDemo()
       router.push('/dashboard')
     } catch (demoError) {
-      setError(demoError instanceof Error ? demoError.message : 'The demo could not be started.')
+      setDemoError(demoError instanceof Error ? demoError.message : 'The demo could not be started.')
       setBusy(null)
     }
   }
@@ -137,9 +140,16 @@ export default function LoginPage() {
     }
   }
 
+  const demoCard = (
+    <DemoCard
+      busy={busy}
+      error={demoError}
+      onStart={() => void handleDemo()}
+    />
+  )
+
   return (
     <main className="grid min-h-screen lg:grid-cols-2">
-      {/* Sign-in */}
       <div className="flex items-center justify-center px-6 py-12">
         <div className="w-full max-w-sm">
           <Link href="/" aria-label="Subtrack home" className="inline-flex">
@@ -170,15 +180,15 @@ export default function LoginPage() {
             </>
           ) : (
             <>
-              <h1 className="mt-8 text-3xl font-semibold tracking-tight text-foreground">
-                {mode === 'signin'
-                  ? 'Know what your recurring payments really cost'
-                  : 'Create your Subtrack account'}
+              <div className="mt-6 lg:hidden">{demoCard}</div>
+
+              <h1 className="mt-8 text-2xl font-semibold tracking-tight text-foreground">
+                {mode === 'signin' ? 'Sign in to Subtrack' : 'Create your account'}
               </h1>
-              <p className="mt-3 text-sm text-muted-foreground">
+              <p className="mt-2 text-sm text-muted-foreground">
                 {mode === 'signin'
-                  ? 'Subscriptions, rent, bills and memberships — found in your inbox and added up in one place.'
-                  : 'Start with an email and password. You can connect Gmail afterwards to find recurring charges automatically.'}
+                  ? 'Welcome back. Enter your details to continue.'
+                  : 'Free to use. You can connect Gmail after signing up.'}
               </p>
 
               {sessionExpired ? (
@@ -240,23 +250,24 @@ export default function LoginPage() {
                   />
                 </div>
 
-                <Button type="submit" className="w-full" disabled={busy !== null}>
+                <Button type="submit" className="h-10 w-full" disabled={busy !== null}>
                   {busy === 'email'
                     ? (mode === 'signin' ? 'Signing in…' : 'Creating account…')
                     : (mode === 'signin' ? 'Sign in' : 'Create account')}
                 </Button>
               </form>
 
-              <div className="my-6 flex items-center gap-3">
+              <div className="my-5 flex items-center gap-3">
                 <span className="h-px flex-1 bg-border" aria-hidden="true" />
                 <span className="text-xs text-muted-foreground">or</span>
                 <span className="h-px flex-1 bg-border" aria-hidden="true" />
               </div>
 
               <button
+                type="button"
                 onClick={handleGoogleLogin}
                 disabled={busy !== null}
-                className="flex w-full items-center justify-center gap-3 rounded-xl border border-border bg-card px-6 py-3 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted disabled:opacity-60"
+                className="flex w-full items-center justify-center gap-3 rounded-xl border border-border bg-card px-6 py-2.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted disabled:opacity-60"
               >
                 {busy === 'google' ? (
                   <>
@@ -279,57 +290,31 @@ export default function LoginPage() {
                 )}
               </button>
 
-              <button
-                type="button"
-                onClick={() => void handleDemo()}
-                disabled={busy !== null}
-                className="mt-3 w-full rounded-xl px-6 py-2.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-60"
-              >
-                {busy === 'demo' ? 'Setting up your demo…' : 'Just looking? Try the demo with sample data →'}
-              </button>
-
               {error && (
                 <p role="alert" className="mt-3 text-sm text-destructive">
                   {error}
                 </p>
               )}
 
-              <p className="mt-6 text-sm text-muted-foreground">
-                {mode === 'signin' ? (
-                  <>
-                    New to Subtrack?{' '}
-                    <button
-                      type="button"
-                      className="font-medium text-foreground underline"
-                      onClick={() => switchMode('signup')}
-                    >
-                      Create an account
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    Already have an account?{' '}
-                    <button
-                      type="button"
-                      className="font-medium text-foreground underline"
-                      onClick={() => switchMode('signin')}
-                    >
-                      Sign in
-                    </button>
-                  </>
-                )}
+              <p className="mt-6 text-center text-sm text-muted-foreground">
+                {mode === 'signin' ? "Don't have an account? " : 'Already have an account? '}
+                <button
+                  type="button"
+                  className="font-medium text-primary hover:underline"
+                  onClick={() => switchMode(mode === 'signin' ? 'signup' : 'signin')}
+                >
+                  {mode === 'signin' ? 'Sign up' : 'Sign in'}
+                </button>
               </p>
 
-              <p className="mt-6 text-xs leading-5 text-muted-foreground">
-                By continuing you agree to our <Link className="underline hover:text-foreground" href="/terms">terms</Link> and acknowledge our <Link className="underline hover:text-foreground" href="/privacy">privacy policy</Link>. Subtrack only ever reads your email—it never sends anything.
+              <p className="mt-6 text-center text-xs leading-5 text-muted-foreground">
+                By continuing you agree to our <Link className="underline hover:text-foreground" href="/terms">terms</Link> and <Link className="underline hover:text-foreground" href="/privacy">privacy policy</Link>.
               </p>
             </>
           )}
         </div>
       </div>
 
-      {/* Value proposition. Hidden on small screens, where the sign-in should
-          be the entire viewport rather than something to scroll past. */}
       <div className="relative hidden items-center overflow-hidden bg-sidebar px-12 lg:flex">
         <div
           className="pointer-events-none absolute -right-24 -top-24 h-96 w-96 rounded-full opacity-[0.18] blur-3xl"
@@ -342,22 +327,62 @@ export default function LoginPage() {
           aria-hidden="true"
         />
 
-        <ul className="relative z-10 max-w-md space-y-10">
-          {POINTS.map((point, i) => (
-            <li key={point.title}>
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                {i + 1}
-              </span>
-              <p className="mt-4 text-lg font-semibold tracking-tight text-foreground">
-                {point.title}
-              </p>
-              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                {point.body}
-              </p>
-            </li>
-          ))}
-        </ul>
+        <div className="relative z-10 max-w-md">
+          <p className="text-3xl font-semibold tracking-tight text-foreground">
+            Know what your recurring payments really cost
+          </p>
+
+          <ul className="mt-8 space-y-5">
+            {POINTS.map(point => (
+              <li key={point.title} className="flex gap-3">
+                <Check className="mt-0.5 h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+                <div>
+                  <p className="font-medium text-foreground">{point.title}</p>
+                  <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground">{point.body}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          <div className="mt-10">{demoCard}</div>
+        </div>
       </div>
     </main>
+  )
+}
+
+function DemoCard({
+  busy,
+  error,
+  onStart,
+}: {
+  busy: 'email' | 'google' | 'demo' | null
+  error: string | null
+  onStart: () => void
+}) {
+  return (
+    <div className="rounded-2xl border border-primary/30 bg-primary/10 p-5">
+      <p className="flex items-center gap-2 font-semibold text-foreground">
+        <Sparkles className="h-4 w-4 text-primary" aria-hidden="true" />
+        Just looking?
+      </p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Explore Subtrack with sample data. No sign-up, and it&apos;s cleared after 24 hours.
+      </p>
+      <Button
+        type="button"
+        onClick={onStart}
+        disabled={busy !== null}
+        className="mt-4 h-10 w-full"
+      >
+        {busy === 'demo' ? 'Setting up your demo…' : 'Try the demo'}
+        {busy === 'demo' ? null : <ArrowRight aria-hidden="true" />}
+      </Button>
+      {error && (
+        <p role="alert" className="mt-3 text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
   )
 }
