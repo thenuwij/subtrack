@@ -512,6 +512,14 @@ export async function restoreDetected(token: string, id: string) {
   return request(`/detected/${id}/restore`, token, { method: 'POST' })
 }
 
+export async function clearDismissedDetected(token: string, id: string) {
+  return request(`/detected/${id}`, token, { method: 'DELETE' })
+}
+
+export async function clearAllDismissedDetected(token: string): Promise<{ cleared: number }> {
+  return request('/detected/dismissed', token, { method: 'DELETE' })
+}
+
 export async function approveDetected(
   token: string,
   id: string,
