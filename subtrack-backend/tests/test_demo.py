@@ -218,6 +218,24 @@ class DemoSessionTests(unittest.TestCase):
         self.assertIsNone(self.db.get(UserPreference, old_user))
         self.assertEqual(self.db.query(DemoSession).count(), 1)
 
+    def test_expired_demos_are_purged_when_the_api_starts(self):
+        from app.main import _purge_expired_demos_at_startup
+
+        with patch.object(settings, "demo_token_secret", DEMO_SECRET):
+            session = create_demo_session(request_from("198.51.100.3"), self.db)
+            demo_user = auth.verify_token(credentials(session["access_token"]))
+        self.db.query(DemoSession).filter(
+            DemoSession.demo_user_id == demo_user,
+        ).update({"expires_at": datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)})
+        self.db.commit()
+
+        with patch("app.database.SessionLocal", sessionmaker(bind=self.db.get_bind())):
+            _purge_expired_demos_at_startup()
+
+        self.db.expire_all()
+        self.assertIsNone(self.db.get(DemoSession, demo_user))
+        self.assertEqual(self.db.query(Subscription).filter(Subscription.user_id == demo_user).count(), 0)
+
 
 class DemoGuardrailTests(unittest.TestCase):
     def setUp(self):

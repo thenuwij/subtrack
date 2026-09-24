@@ -241,7 +241,24 @@ def on_startup():
     finally:
         db.close()
 
+    _purge_expired_demos_at_startup()
     logger.info("Subtrack API started")
+
+
+def _purge_expired_demos_at_startup() -> None:
+    from app.database import SessionLocal
+    from app.services.demo import purge_expired_demos
+
+    db = SessionLocal()
+    try:
+        purged = purge_expired_demos(db)
+        if purged:
+            logger.info("Purged %d expired demo session(s) at startup", purged)
+    except Exception as exc:  # noqa: BLE001 - start-up must not fail over demo clean-up
+        db.rollback()
+        logger.warning("Could not purge expired demos at startup (%s)", type(exc).__name__)
+    finally:
+        db.close()
 
 
 def on_shutdown():
