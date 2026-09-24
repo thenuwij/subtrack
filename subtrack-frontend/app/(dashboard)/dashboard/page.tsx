@@ -169,17 +169,6 @@ export default function DashboardPage() {
   const shareOfIncome =
     monthlyIncome && monthlyIncome > 0 ? (monthlyTotal / monthlyIncome) * 100 : null
 
-  const convertibleChanges = useMemo(
-    () => changes.filter(change => canConvert(change.currency)),
-    [changes, canConvert],
-  )
-  const netChange = useMemo(
-    () => convertibleChanges.reduce(
-      (sum, change) => sum + (convertAmount(change.delta, change.currency) ?? 0), 0,
-    ),
-    [convertibleChanges, convertAmount]
-  )
-
   // The hero bar, in the same colours as the breakdown below it, so the two
   // read as one system rather than two unrelated charts.
   const heroSegments = useMemo(() => {
@@ -466,18 +455,6 @@ export default function DashboardPage() {
                 Last 30 days
               </p>
             </div>
-            {convertibleChanges.length > 0 && netChange !== 0 && (
-              <div className="shrink-0 text-right">
-                <p
-                  className="text-sm font-semibold tabular-nums"
-                  style={{ color: netChange > 0 ? 'var(--increase)' : 'var(--decrease)' }}
-                >
-                  {netChange > 0 ? '+' : '−'}
-                  {formatCurrency(Math.abs(netChange), baseCurrency)}
-                </p>
-                <p className="text-xs text-muted-foreground">net per month</p>
-              </div>
-            )}
           </div>
 
           {changesError ? (
