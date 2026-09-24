@@ -593,9 +593,15 @@ export default function AccountPage() {
       <Section title="Danger zone" tone="danger">
         <Row
           title="Delete Subtrack app data"
-          description="Permanently deletes your Subtrack records and disconnects Gmail. Your sign-in account itself remains."
+          description={currentUser.isDemo
+            ? 'Not available in the demo. Demo data is cleared automatically after 24 hours.'
+            : 'Permanently deletes your Subtrack records and disconnects Gmail. Your sign-in account itself remains.'}
         >
-          <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)}>
+          <Button
+            variant="destructive"
+            onClick={() => setDeleteDialogOpen(true)}
+            disabled={currentUser.isDemo}
+          >
             Delete app data
           </Button>
         </Row>
