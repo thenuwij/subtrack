@@ -50,7 +50,7 @@ import { UpcomingCharges } from '@/components/dashboard/UpcomingCharges'
 import { NeedsAttention } from '@/components/dashboard/NeedsAttention'
 import { GettingStarted } from '@/components/onboarding/GettingStarted'
 import { apiKeys, errorMessage, useApi } from '@/lib/hooks/useApi'
-import { getAccessToken } from '@/lib/auth/session'
+import { getAccessToken, useIsDemo } from '@/lib/auth/session'
 
 function formatDate(date: string) {
   return new Date(date).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
@@ -92,6 +92,7 @@ export default function DashboardPage() {
   const pendingDetections = useMemo(() => detectionsQuery.data ?? [], [detectionsQuery.data])
   const monthlyIncome = preferencesQuery.data?.monthly_income ?? null
   const gmail = gmailQuery.data ?? null
+  const isDemo = useIsDemo()
   const forecast = forecastQuery.data ?? null
 
   const loadError = errorMessage(subscriptionsQuery.error, 'Could not load recurring payments.')
@@ -409,7 +410,7 @@ export default function DashboardPage() {
         />
 
         {/* ── Inbox nudge — only while there's something to act on ─────── */}
-        {gmail && !gmail.connected && (
+        {gmail && !gmail.connected && !isDemo && (
           <section className="flex flex-col gap-4 rounded-2xl bg-card p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-start gap-3">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">

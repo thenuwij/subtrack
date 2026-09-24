@@ -32,7 +32,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { getAccessToken, signOut } from '@/lib/auth/session'
+import { endDemo, getAccessToken, signOut } from '@/lib/auth/session'
 import { useCurrentUser } from '@/lib/hooks/useCurrentUser'
 import { UserAvatar } from '@/components/layout/UserAvatar'
 import { LogOut } from 'lucide-react'
@@ -265,6 +265,11 @@ export default function AccountPage() {
     router.push('/login')
   }
 
+  function handleCreateAccount() {
+    endDemo()
+    window.location.replace('/login?mode=signup')
+  }
+
   async function handleExport() {
     setExportBusy(true)
     try {
@@ -433,7 +438,19 @@ export default function AccountPage() {
             </p>
           </div>
 
-          {gmail.connected ? (
+          {currentUser.isDemo ? (
+            <div className="flex flex-col gap-4 rounded-xl bg-muted/50 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium">Not available in the demo</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  The demo uses sample findings instead of a real inbox. Create a free account to connect your own Gmail.
+                </p>
+              </div>
+              <Button variant="outline" onClick={handleCreateAccount} className="shrink-0">
+                Create a free account
+              </Button>
+            </div>
+          ) : gmail.connected ? (
             <>
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">

@@ -32,7 +32,7 @@ type Mode = 'signin' | 'signup'
 export default function LoginPage() {
   const supabase = createClient()
   const router = useRouter()
-  const [mode, setMode] = useState<Mode>('signin')
+  const [chosenMode, setMode] = useState<Mode | null>(null)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState<'email' | 'google' | 'demo' | null>(null)
@@ -52,6 +52,10 @@ export default function LoginPage() {
   const dataDeleted = reason === 'data_deleted' || gmailRevocationFailed
   const passwordUpdated = reason === 'password_updated'
   const linkInvalid = reason === 'link_invalid'
+  const requestedMode = hydrated
+    ? new URLSearchParams(window.location.search).get('mode')
+    : null
+  const mode: Mode = chosenMode ?? (requestedMode === 'signup' ? 'signup' : 'signin')
 
   function switchMode(next: Mode) {
     setMode(next)

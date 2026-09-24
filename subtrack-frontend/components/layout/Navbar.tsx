@@ -106,7 +106,7 @@ export default function Navbar() {
           {renderNavItems()}
         </nav>
 
-        {gmailConnected === false && (
+        {gmailConnected === false && !currentUser.isDemo && (
           <Link
             href="/account#inbox"
             className="mx-1 mb-4 rounded-xl bg-card p-3 shadow-sm transition-colors hover:bg-muted/60"

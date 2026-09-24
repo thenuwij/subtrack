@@ -17,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { getAccessToken } from '@/lib/auth/session'
+import { getAccessToken, isDemoSession } from '@/lib/auth/session'
 
 export const START_TOUR_EVENT = 'subtrack:start-tour'
 
@@ -58,13 +58,21 @@ const steps: DriveStep[] = [
       description: 'Ask questions in plain English. It can prepare changes for you, and nothing happens until you confirm.',
     },
   },
-  {
-    popover: {
-      title: 'You are all set',
-      description: 'Start by connecting Gmail in Account, or add your first payment. You can replay this tour from Account settings.',
-    },
-  },
 ]
+
+const finalStep: DriveStep = {
+  popover: {
+    title: 'You are all set',
+    description: 'Start by connecting Gmail in Account, or add your first payment. You can replay this tour from Account settings.',
+  },
+}
+
+const demoFinalStep: DriveStep = {
+  popover: {
+    title: 'You are all set',
+    description: 'Explore the sample payments, review the inbox findings, or ask the assistant a question. You can replay this tour from Account.',
+  },
+}
 
 async function markCompleted() {
   const accessToken = await getAccessToken()
@@ -87,7 +95,7 @@ export function OnboardingTour() {
   const startTour = useCallback(() => {
     setDismissed(true)
     const tour = driver({
-      steps,
+      steps: [...steps, isDemoSession() ? demoFinalStep : finalStep],
       showProgress: true,
       progressText: '{{current}} of {{total}}',
       nextBtnText: 'Next',
