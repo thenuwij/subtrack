@@ -12,6 +12,7 @@ export const apiKeys = {
   reminders: (horizonDays: number) => `reminders:${horizonDays}`,
   preferences: 'preferences',
   duplicates: 'duplicates',
+  agentThreads: 'agent-threads',
 } as const
 
 export function errorMessage(error: unknown, fallback: string) {

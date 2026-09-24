@@ -49,6 +49,7 @@ import {
 } from '@/lib/utils/recurrence'
 import { UpcomingCharges } from '@/components/dashboard/UpcomingCharges'
 import { NeedsAttention } from '@/components/dashboard/NeedsAttention'
+import { GettingStarted } from '@/components/onboarding/GettingStarted'
 import { apiKeys, errorMessage, useApi } from '@/lib/hooks/useApi'
 
 function formatDate(date: string) {
@@ -266,21 +267,13 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <ol className="mx-auto mt-14 grid max-w-2xl gap-6 text-left sm:grid-cols-3">
-          {[
-            { step: '1', title: 'Connect Gmail', body: 'Read-only access to receipt emails. Nothing else is touched.' },
-            { step: '2', title: 'We scan for receipts', body: 'Repeated charges from the same biller become a suggestion.' },
-            { step: '3', title: 'You approve', body: 'Nothing joins your list until you say so.' },
-          ].map(item => (
-            <li key={item.step}>
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
-                {item.step}
-              </span>
-              <p className="mt-3 text-sm font-semibold text-foreground">{item.title}</p>
-              <p className="mt-1 text-sm text-muted-foreground">{item.body}</p>
-            </li>
-          ))}
-        </ol>
+        <div className="mx-auto mt-12 max-w-md">
+          <GettingStarted
+            gmailConnected={Boolean(gmail?.connected)}
+            hasPayments={hasPayments}
+            hasIncome={monthlyIncome !== null}
+          />
+        </div>
       </div>
     )
   }
@@ -374,6 +367,11 @@ export default function DashboardPage() {
 
         <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start xl:gap-8">
         <div className="min-w-0 space-y-10 xl:col-start-2 xl:row-start-1 xl:space-y-6">
+        <GettingStarted
+          gmailConnected={Boolean(gmail?.connected)}
+          hasPayments={hasPayments}
+          hasIncome={monthlyIncome !== null}
+        />
         <ReminderCenter
           reminders={reminders}
           onDismiss={handleDismissReminder}
