@@ -36,6 +36,7 @@ export default function Navbar() {
         <Link
           key={href}
           href={href}
+          data-tour={`nav-${href.slice(1)}`}
           aria-current={active ? 'page' : undefined}
           className={mobile
             ? `relative flex min-w-0 flex-1 flex-col items-center gap-1 rounded-lg px-1 py-2 text-[10px] font-medium transition-colors ${

@@ -21,6 +21,7 @@ import type { User } from '@supabase/supabase-js'
 import type { Currency } from '@/types'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/layout/ThemeToggle'
+import { START_TOUR_EVENT } from '@/components/onboarding/OnboardingTour'
 import { toast } from 'sonner'
 import { GmailScanProgress } from '@/components/gmail/GmailScanProgress'
 import {
@@ -396,6 +397,22 @@ export default function AccountPage() {
             </p>
           </div>
           <ThemeToggle />
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium">Guided tour</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              A quick walkthrough of where everything lives
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => window.dispatchEvent(new Event(START_TOUR_EVENT))}
+          >
+            Replay tour
+          </Button>
         </div>
 
         <div className="flex items-center justify-between gap-4 border-t border-border pt-4">

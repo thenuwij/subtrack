@@ -578,7 +578,7 @@ export async function getPreferences(token: string) {
 // Send only the fields you want to change — omitted fields are left untouched.
 export async function updatePreferences(
   token: string,
-  data: { base_currency?: string; monthly_income?: number | null }
+  data: { base_currency?: string; monthly_income?: number | null; onboarding_completed?: boolean }
 ): Promise<Preferences> {
   return request('/preferences', token, {
     method: 'PATCH',

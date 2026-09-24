@@ -78,6 +78,7 @@ export function AgentChat() {
     <>
       <button
         type="button"
+        data-tour="assistant"
         onClick={() => {
           if (!open) setHasOpened(true)
           setOpen(value => !value)
