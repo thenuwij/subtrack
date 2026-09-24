@@ -27,6 +27,7 @@ from app.models import (  # noqa: E402
     ChangeKind,
     DetectedSubscription,
     DetectionStatus,
+    PaymentStatus,
     Subscription,
     SubscriptionChange,
     UserPreference,
@@ -135,6 +136,22 @@ class AgentFinanceTests(unittest.TestCase):
         self.assertEqual(result["occurrence_count"], 6)
         self.assertEqual(result["missing_due_date_count"], 1)
         self.assertEqual(monthly.next_due, datetime(2026, 6, 30, 9, 0))
+
+    def test_payment_paused_beyond_the_window_is_skipped(self):
+        paused = self.add_payment(
+            "Paused gym", 40, next_due=datetime(2026, 8, 10, 9, 0),
+        )
+        paused.status = PaymentStatus.paused
+        paused.paused_until = datetime(2026, 9, 20, 9, 0)
+        self.db.commit()
+        self.add_payment("Active", 10, next_due=datetime(2026, 8, 12, 9, 0))
+
+        result = upcoming_charges(
+            self.db, "owner", 14, now=datetime(2026, 8, 5, 8, 0),
+        )
+
+        self.assertEqual([row["name"] for row in result["charges"]], ["Active"])
+        self.assertEqual(result["paused_without_resume_count"], 0)
 
     def test_commitment_change_is_monthly_and_excludes_other_users(self):
         sub = self.add_payment("Changed", 15)

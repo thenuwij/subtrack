@@ -358,6 +358,8 @@ def upcoming_charges(
                 paused_without_resume_count += 1
                 continue
             occurrence_start = max(start, utc_naive(sub.paused_until))
+            if occurrence_start > end:
+                continue
         if not sub.next_due:
             missing_due_count += 1
             continue
