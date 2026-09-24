@@ -615,3 +615,11 @@ class AgentResearchCache(Base):
     result_json = Column(JSON, nullable=False)
     expires_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, nullable=False, server_default=func.now())
+
+
+class DemoSession(Base):
+    __tablename__ = "demo_sessions"
+    demo_user_id = Column(String(64), primary_key=True)
+    client_hash = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, server_default=func.now(), index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)

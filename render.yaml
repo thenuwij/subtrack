@@ -37,6 +37,8 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY      # subscription detection
         sync: false
+      - key: DEMO_TOKEN_SECRET
+        sync: false
 
       # MUST match the value used everywhere else that shares this database.
       # Refresh tokens are encrypted at rest; a different key cannot read

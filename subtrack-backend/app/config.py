@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     # Fernet key encrypting stored refresh tokens at rest. Generate with:
     #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     token_encryption_key: str = ""
+    demo_token_secret: str = ""
+    demo_session_hours: int = Field(default=24, ge=1, le=72)
+    demo_sessions_per_client_per_hour: int = Field(default=5, ge=1, le=100)
+    demo_sessions_per_hour: int = Field(default=200, ge=1, le=10_000)
 
     @model_validator(mode="after")
     def resolve_frontend_url(self) -> "Settings":
@@ -131,6 +135,10 @@ class Settings(BaseSettings):
             )
         if not self.anthropic_api_key.strip():
             raise ValueError("ANTHROPIC_API_KEY must not be empty in production")
+        if self.demo_token_secret and len(self.demo_token_secret.strip()) < 64:
+            raise ValueError(
+                "DEMO_TOKEN_SECRET must contain at least 64 characters in production"
+            )
 
         _validate_https_url(
             self.supabase_url,

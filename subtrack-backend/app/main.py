@@ -16,6 +16,7 @@ from app.database import engine
 from app.routers import (
     account,
     agent,
+    demo,
     detected,
     gmail,
     meta,
@@ -72,6 +73,7 @@ app.include_router(gmail.router)
 app.include_router(detected.router)
 app.include_router(reminders.router)
 app.include_router(meta.router)
+app.include_router(demo.router)
 
 
 @app.middleware("http")

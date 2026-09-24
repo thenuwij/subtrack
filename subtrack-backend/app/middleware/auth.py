@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
 
@@ -182,6 +183,48 @@ def _find_jwk(kid: str) -> dict | None:
     return None
 
 
+DEMO_TOKEN_ALGORITHM = "HS512"
+DEMO_TOKEN_AUDIENCE = "subtrack-demo"
+DEMO_USER_PREFIX = "demo_"
+
+
+def is_demo_user(user_id: str) -> bool:
+    return user_id.startswith(DEMO_USER_PREFIX)
+
+
+def issue_demo_token(user_id: str, expires_at: datetime) -> str:
+    if not settings.demo_token_secret or not is_demo_user(user_id):
+        raise ValueError("Demo tokens are not available")
+    return jwt.encode(
+        {
+            "sub": user_id,
+            "aud": DEMO_TOKEN_AUDIENCE,
+            "iss": DEMO_TOKEN_AUDIENCE,
+            "exp": int(expires_at.replace(tzinfo=timezone.utc).timestamp()),
+        },
+        settings.demo_token_secret,
+        algorithm=DEMO_TOKEN_ALGORITHM,
+    )
+
+
+def verify_demo_token(token: str) -> str:
+    if not settings.demo_token_secret:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    payload = jwt.decode(
+        token,
+        settings.demo_token_secret,
+        algorithms=[DEMO_TOKEN_ALGORITHM],
+        audience=DEMO_TOKEN_AUDIENCE,
+        issuer=DEMO_TOKEN_AUDIENCE,
+        leeway=30,
+        options={"require": ["exp", "sub", "aud", "iss"]},
+    )
+    user_id = payload.get("sub")
+    if not isinstance(user_id, str) or not is_demo_user(user_id) or len(user_id) > 64:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user_id
+
+
 def verify_token(
     credentials: HTTPAuthorizationCredentials = Security(security),  # noqa: B008
 ) -> str:
@@ -204,6 +247,8 @@ def verify_token(
                 logger.error("Failed to construct EC key from matched JWK: %s", e)
                 raise HTTPException(status_code=401, detail="Invalid or expired token") from None
             algorithms = ["ES256"]
+        elif algorithm == DEMO_TOKEN_ALGORITHM:
+            return verify_demo_token(token)
         elif algorithm == "HS256":
             # Some legacy Supabase HS256 tokens include a kid. The verified
             # algorithm, rather than kid presence, decides the compatibility
