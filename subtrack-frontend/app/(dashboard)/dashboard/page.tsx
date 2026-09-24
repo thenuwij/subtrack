@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowDownRight,
@@ -27,6 +27,7 @@ import type {
   GmailStatus,
   DetectedSubscription,
   PaymentReminder,
+  Preferences,
   Subscription,
   SubscriptionChange,
   SubscriptionForecast,
@@ -48,114 +49,73 @@ import {
 } from '@/lib/utils/recurrence'
 import { UpcomingCharges } from '@/components/dashboard/UpcomingCharges'
 import { NeedsAttention } from '@/components/dashboard/NeedsAttention'
+import { apiKeys, errorMessage, useApi } from '@/lib/hooks/useApi'
 
 function formatDate(date: string) {
   return new Date(date).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
 }
 
 export default function DashboardPage() {
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
-  const [changes, setChanges] = useState<SubscriptionChange[]>([])
-  const [monthlyIncome, setMonthlyIncome] = useState<number | null>(null)
-  const [gmail, setGmail] = useState<GmailStatus | null>(null)
-  const [reminders, setReminders] = useState<PaymentReminder[]>([])
-  const [pendingDetections, setPendingDetections] = useState<DetectedSubscription[]>([])
-  const [forecast, setForecast] = useState<SubscriptionForecast | null>(null)
-  const [forecastError, setForecastError] = useState('')
-  const [changesError, setChangesError] = useState('')
-  const [gmailScanStale, setGmailScanStale] = useState(false)
-  const [forecastRetrying, setForecastRetrying] = useState(false)
-  const [reminderError, setReminderError] = useState('')
-  const [remindersRetrying, setRemindersRetrying] = useState(false)
   const [changesExpanded, setChangesExpanded] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState('')
   const {
     baseCurrency, canConvert, convertAmount, ratesLoading, ratesStale, ratesAsOf,
   } = useCurrency()
 
-  const fetchData = useCallback(async () => {
-    try {
-      const supabase = createClient()
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) return
+  const subscriptionsQuery = useApi<Subscription[]>(
+    apiKeys.subscriptions('current'), token => getSubscriptions(token),
+  )
+  const changesQuery = useApi<SubscriptionChange[]>(
+    apiKeys.subscriptionChanges(30), token => getSubscriptionChanges(token, 30),
+  )
+  const preferencesQuery = useApi<Preferences>(apiKeys.preferences, getPreferences)
+  const gmailQuery = useApi<GmailStatus>(apiKeys.gmailStatus, getGmailStatus)
+  const remindersQuery = useApi<PaymentReminder[]>(
+    apiKeys.reminders(90), token => getReminders(token, { horizonDays: 90 }),
+  )
+  const forecastQuery = useApi<SubscriptionForecast>(
+    apiKeys.forecast(30), token => getSubscriptionForecast(token, 30),
+  )
+  const detectionsQuery = useApi<DetectedSubscription[]>(
+    apiKeys.detected('pending'), token => getDetected(token, 'pending'),
+  )
 
-      const token = session.access_token
-      const [
-        subsResult,
-        changesResult,
-        preferencesResult,
-        gmailStatus,
-        reminderResult,
-        forecastResult,
-        detectionResult,
-      ] = await Promise.all([
-        getSubscriptions(token)
-          .then(rows => ({ rows, error: '' }))
-          .catch(error => ({
-            rows: null,
-            error: error instanceof Error ? error.message : 'Could not load recurring payments.',
-          })),
-        getSubscriptionChanges(token, 30)
-          .then(rows => ({ rows, error: '' }))
-          .catch(error => ({
-            rows: null,
-            error: error instanceof Error ? error.message : 'Could not load recent changes.',
-          })),
-        getPreferences(token).catch(() => null),
-        getGmailStatus(token).catch(() => null),
-        getReminders(token, { horizonDays: 90 })
-          .then(rows => ({ rows, error: '' }))
-          .catch(error => ({
-            rows: [],
-            error: error instanceof Error ? error.message : 'Could not load reminders.',
-          })),
-        getSubscriptionForecast(token, 30)
-          .then(value => ({ value, error: '' }))
-          .catch(error => ({
-            value: null,
-            error: error instanceof Error ? error.message : 'Could not calculate upcoming charges.',
-          })),
-        getDetected(token, 'pending').catch(() => []),
-      ])
+  const queries = [
+    subscriptionsQuery, changesQuery, preferencesQuery, gmailQuery,
+    remindersQuery, forecastQuery, detectionsQuery,
+  ]
+  const loading = queries.some(query => query.isLoading)
 
-      if (subsResult.rows) {
-        setSubscriptions(subsResult.rows)
-        setLoadError('')
-      } else {
-        setLoadError(subsResult.error)
-      }
-      if (changesResult.rows) setChanges(changesResult.rows)
-      setChangesError(changesResult.error)
-      if (preferencesResult) setMonthlyIncome(preferencesResult.monthly_income ?? null)
-      setGmail(gmailStatus)
-      const lastScanTime = gmailStatus?.last_scanned_at
-        ? new Date(gmailStatus.last_scanned_at).getTime()
-        : Number.NaN
-      setGmailScanStale(Boolean(
-        gmailStatus?.connected
-        && gmailStatus.scan_status !== 'running'
-        && Number.isFinite(lastScanTime)
-        && Date.now() - lastScanTime > 30 * 24 * 60 * 60 * 1000,
-      ))
-      setReminders(reminderResult.rows)
-      setReminderError(reminderResult.error)
-      if (forecastResult.value) setForecast(forecastResult.value)
-      setForecastError(forecastResult.error)
-      setPendingDetections(detectionResult)
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Could not load your dashboard.')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const subscriptions = useMemo(() => subscriptionsQuery.data ?? [], [subscriptionsQuery.data])
+  const changes = useMemo(() => changesQuery.data ?? [], [changesQuery.data])
+  const reminders = useMemo(() => remindersQuery.data ?? [], [remindersQuery.data])
+  const pendingDetections = useMemo(() => detectionsQuery.data ?? [], [detectionsQuery.data])
+  const monthlyIncome = preferencesQuery.data?.monthly_income ?? null
+  const gmail = gmailQuery.data ?? null
+  const forecast = forecastQuery.data ?? null
 
-  useEffect(() => {
-    void fetchData()
-    const refresh = () => { void fetchData() }
-    window.addEventListener('subtrack:data-changed', refresh)
-    return () => window.removeEventListener('subtrack:data-changed', refresh)
-  }, [fetchData])
+  const loadError = errorMessage(subscriptionsQuery.error, 'Could not load recurring payments.')
+  const changesError = errorMessage(changesQuery.error, 'Could not load recent changes.')
+  const reminderError = errorMessage(remindersQuery.error, 'Could not load reminders.')
+  const forecastError = errorMessage(forecastQuery.error, 'Could not calculate upcoming charges.')
+  const remindersRetrying = remindersQuery.isValidating
+  const forecastRetrying = forecastQuery.isValidating
+
+  const [openedAt] = useState(() => Date.now())
+  const gmailScanStale = useMemo(() => {
+    const lastScanTime = gmail?.last_scanned_at
+      ? new Date(gmail.last_scanned_at).getTime()
+      : Number.NaN
+    return Boolean(
+      gmail?.connected
+      && gmail.scan_status !== 'running'
+      && Number.isFinite(lastScanTime)
+      && openedAt - lastScanTime > 30 * 24 * 60 * 60 * 1000,
+    )
+  }, [gmail, openedAt])
+
+  function refreshAll() {
+    for (const query of queries) void query.mutate()
+  }
 
   useRegisterAgentPageContext({
     visible_subscription_ids: subscriptions.slice(0, 25).map(subscription => subscription.id),
@@ -238,40 +198,13 @@ export default function DashboardPage() {
     if (!session) throw new Error('Your session has expired.')
     try {
       await dismissReminder(session.access_token, id)
-      setReminders(current => current.filter(reminder => reminder.id !== id))
+      void remindersQuery.mutate(
+        current => current?.filter(reminder => reminder.id !== id),
+        { revalidate: false },
+      )
       toast.success('Reminder dismissed')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not dismiss reminder.')
-    }
-  }
-
-  async function retryReminders() {
-    setRemindersRetrying(true)
-    try {
-      const { data: { session } } = await createClient().auth.getSession()
-      if (!session) throw new Error('Your session has expired.')
-      const rows = await getReminders(session.access_token, { horizonDays: 90 })
-      setReminders(rows)
-      setReminderError('')
-    } catch (error) {
-      setReminderError(error instanceof Error ? error.message : 'Could not load reminders.')
-    } finally {
-      setRemindersRetrying(false)
-    }
-  }
-
-  async function retryForecast() {
-    setForecastRetrying(true)
-    try {
-      const { data: { session } } = await createClient().auth.getSession()
-      if (!session) throw new Error('Your session has expired.')
-      const next = await getSubscriptionForecast(session.access_token, 30)
-      setForecast(next)
-      setForecastError('')
-    } catch (error) {
-      setForecastError(error instanceof Error ? error.message : 'Could not calculate upcoming charges.')
-    } finally {
-      setForecastRetrying(false)
     }
   }
 
@@ -293,10 +226,7 @@ export default function DashboardPage() {
           <p className="mt-2 text-sm text-muted-foreground">{loadError}</p>
           <Button
             className="mt-5"
-            onClick={() => {
-              setLoading(true)
-              void fetchData()
-            }}
+            onClick={refreshAll}
           >
             Try again
           </Button>
@@ -356,13 +286,13 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="space-y-10">
 
         {loadError && (
           <div className="flex flex-col gap-3 rounded-xl border border-destructive/20 bg-destructive/5 p-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-muted-foreground">Couldn&apos;t refresh your payments. Showing the last loaded totals.</p>
-            <Button variant="outline" size="sm" onClick={() => void fetchData()}>Retry</Button>
+            <Button variant="outline" size="sm" onClick={refreshAll}>Retry</Button>
           </div>
         )}
 
@@ -442,6 +372,8 @@ export default function DashboardPage() {
           ) : null}
         </section>
 
+        <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start xl:gap-8">
+        <div className="min-w-0 space-y-10 xl:col-start-2 xl:row-start-1 xl:space-y-6">
         <ReminderCenter
           reminders={reminders}
           onDismiss={handleDismissReminder}
@@ -456,7 +388,7 @@ export default function DashboardPage() {
               size="sm"
               variant="outline"
               disabled={remindersRetrying}
-              onClick={() => void retryReminders()}
+              onClick={() => void remindersQuery.mutate()}
               className="self-start sm:self-center"
             >
               {remindersRetrying ? 'Trying again…' : 'Try again'}
@@ -475,7 +407,7 @@ export default function DashboardPage() {
           forecast={forecast}
           error={forecastError}
           retrying={forecastRetrying}
-          onRetry={() => void retryForecast()}
+          onRetry={() => void forecastQuery.mutate()}
         />
 
         {/* ── Inbox nudge — only while there's something to act on ─────── */}
@@ -501,6 +433,9 @@ export default function DashboardPage() {
           </section>
         )}
 
+        </div>
+
+        <div className="min-w-0 space-y-10 xl:col-start-1 xl:row-start-1 xl:space-y-8">
         {/* ── Where your money goes ───────────────────────────────────── */}
         <SpendBreakdown
           ranked={ranked}
@@ -538,7 +473,7 @@ export default function DashboardPage() {
                 <p className="text-sm font-medium text-foreground">Recent changes are unavailable</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">We won&apos;t guess that nothing changed.</p>
               </div>
-              <Button size="sm" variant="outline" onClick={() => void fetchData()}>Try again</Button>
+              <Button size="sm" variant="outline" onClick={() => void changesQuery.mutate()}>Try again</Button>
             </div>
           ) : changes.length === 0 ? (
             <div className="mt-6 py-8 text-center">
@@ -634,6 +569,8 @@ export default function DashboardPage() {
             </p>
           ) : null}
         </section>
+        </div>
+        </div>
       </div>
     </div>
   )

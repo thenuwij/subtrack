@@ -9,7 +9,7 @@ function Bar({ className }: { className?: string }) {
  * instead of rearranging itself. */
 export function DashboardSkeleton() {
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="space-y-10" aria-busy="true" aria-live="polite">
         <span className="sr-only">Loading your dashboard</span>
 
@@ -25,6 +25,18 @@ export function DashboardSkeleton() {
           <Bar className="h-3 w-full rounded-full" />
         </div>
 
+        <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start xl:gap-8">
+        <div className="hidden space-y-6 xl:col-start-2 xl:row-start-1 xl:block">
+          {[...Array(2)].map((_, i) => (
+            <div key={i} className="space-y-3 rounded-2xl bg-card p-5 shadow-sm">
+              <Bar className="h-5 w-36" />
+              <Bar className="h-4 w-full" />
+              <Bar className="h-4 w-3/4" />
+            </div>
+          ))}
+        </div>
+
+        <div className="min-w-0 space-y-10 xl:col-start-1 xl:row-start-1 xl:space-y-8">
         {/* Breakdown */}
         <div className="rounded-2xl bg-card p-6 shadow-sm">
           <div className="flex items-center justify-between">
@@ -65,6 +77,8 @@ export function DashboardSkeleton() {
               </div>
             ))}
           </div>
+        </div>
+        </div>
         </div>
       </div>
     </div>

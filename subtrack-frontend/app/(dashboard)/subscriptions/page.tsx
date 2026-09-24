@@ -1,7 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { apiKeys, errorMessage, useApi } from '@/lib/hooks/useApi'
 import {
   createSubscription,
   deleteSubscription,
@@ -14,13 +15,18 @@ import {
 import { Category, DuplicatePair, Subscription, SubscriptionInput } from '@/types'
 import { SubscriptionCard }       from '@/components/subscriptions/SubscriptionCard'
 import { AddSubscriptionModal }   from '@/components/subscriptions/AddSubscriptionModal'
-import { FilterBar }              from '@/components/shared/FilterBar'
+import {
+  FilterBar,
+  type Period,
+  type RecordScope,
+  type SortKey,
+} from '@/components/shared/FilterBar'
 import { Button }                 from '@/components/ui/button'
 import { Skeleton }               from '@/components/ui/skeleton'
 import { Plus, CreditCard }       from 'lucide-react'
 import { useCurrency }            from '@/lib/context/currency'
 import { formatCurrency }         from '@/lib/utils/currency'
-import { formatCategory }         from '@/lib/utils/categories'
+import { categoryColor, formatCategory } from '@/lib/utils/categories'
 import { toast } from 'sonner'
 import { useRegisterAgentPageContext } from '@/lib/agent/page-context'
 import { ReminderDialog } from '@/components/reminders/ReminderDialog'
@@ -37,8 +43,6 @@ import {
   storedDateKey,
   todayUtcDateKey,
 } from '@/lib/utils/dates'
-
-type RecordScope = 'current' | 'paused' | 'history' | 'all'
 
 function inPeriod(dateStr: string | null, period: 'all' | 'day' | 'week' | 'month'): boolean {
   if (period === 'all') return true
@@ -59,86 +63,44 @@ function inPeriod(dateStr: string | null, period: 'all' | 'day' | 'week' | 'mont
 }
 
 export default function SubscriptionsPage() {
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
+  const subscriptionsQuery = useApi<Subscription[]>(
+    apiKeys.subscriptions('all'),
+    token => getSubscriptions(token, { includeInactive: true }),
+    { onError: () => { toast.error('Something went wrong') } },
+  )
   // Two rows for one service double-counts the cost, and detection can easily
   // produce "Claude" and "Anthropic (Claude)" separately.
-  const [duplicates, setDuplicates] = useState<DuplicatePair[]>([])
-  const [duplicateError, setDuplicateError] = useState('')
-  const [duplicateChecking, setDuplicateChecking] = useState(false)
+  const duplicatesQuery = useApi<DuplicatePair[]>(apiKeys.duplicates, getDuplicates)
+  const subscriptions = useMemo(() => subscriptionsQuery.data ?? [], [subscriptionsQuery.data])
+  const duplicates = duplicatesQuery.data ?? []
+  const duplicateError = duplicatesQuery.error
+    ? 'Could not check for possible duplicates. Your payments and totals are still available.'
+    : ''
+  const duplicateChecking = duplicatesQuery.isValidating
+  const loading = subscriptionsQuery.isLoading
+  const error = subscriptionsQuery.isValidating
+    ? null
+    : errorMessage(subscriptionsQuery.error, 'Failed to load recurring payments.') || null
   const [merging, setMerging] = useState<string | null>(null)
   const [dismissingDuplicate, setDismissingDuplicate] = useState<string | null>(null)
-  const [loading, setLoading]             = useState(true)
-  const [error, setError]                 = useState<string | null>(null)
   const [modalOpen, setModalOpen]         = useState(false)
   const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null)
   const [reminderSubscription, setReminderSubscription] = useState<Subscription | null>(null)
   const [assistantSubscription, setAssistantSubscription] = useState<Subscription | null>(null)
   const { baseCurrency, canConvert, convertAmount, ratesLoading, ratesStale } = useCurrency()
-  const duplicateRequestRef = useRef(0)
-  const subscriptionRequestRef = useRef(0)
   const duplicateOperationRef = useRef(false)
 
   // filter / sort / group state
   const [search, setSearch]                   = useState('')
   const [selectedCategory, setSelectedCategory] = useState<Category | ''>('')
-  const [period, setPeriod]                   = useState<'all' | 'day' | 'week' | 'month'>('all')
+  const [period, setPeriod]                   = useState<Period>('all')
   const [fromDate, setFromDate]               = useState('')
   const [toDate, setToDate]                   = useState('')
-  const [sortOrder, setSortOrder]             = useState<'desc' | 'asc'>('asc')
+  const [sortBy, setSortBy]                   = useState<SortKey>('due')
   const [groupByCategory, setGroupByCategory] = useState(false)
   const [scope, setScope]                     = useState<RecordScope>('current')
 
   // ── fetch ──────────────────────────────────────────────────────────────────
-
-  const refreshDuplicates = useCallback(async (accessToken: string, clear = false) => {
-    const requestId = ++duplicateRequestRef.current
-    if (clear) setDuplicates([])
-    setDuplicateError('')
-    setDuplicateChecking(true)
-    try {
-      const result = await getDuplicates(accessToken)
-      if (requestId !== duplicateRequestRef.current) return
-      setDuplicates(result)
-    } catch {
-      if (requestId !== duplicateRequestRef.current) return
-      setDuplicateError('Could not check for possible duplicates. Your payments and totals are still available.')
-    } finally {
-      if (requestId === duplicateRequestRef.current) setDuplicateChecking(false)
-    }
-  }, [])
-
-  const fetchSubscriptions = useCallback(async () => {
-    const requestId = ++subscriptionRequestRef.current
-    const supabase = createClient()
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session || requestId !== subscriptionRequestRef.current) {
-      if (requestId === subscriptionRequestRef.current) {
-        setError('Your session has expired. Sign in again to load recurring payments.')
-        setLoading(false)
-      }
-      return
-    }
-    try {
-      const data = await getSubscriptions(session.access_token, { includeInactive: true })
-      if (requestId !== subscriptionRequestRef.current) return
-      setSubscriptions(data)
-      setError(null)
-      void refreshDuplicates(session.access_token)
-    } catch (e) {
-      if (requestId !== subscriptionRequestRef.current) return
-      setError(e instanceof Error ? e.message : 'Failed to load recurring payments.')
-      toast.error('Something went wrong')
-    } finally {
-      if (requestId === subscriptionRequestRef.current) setLoading(false)
-    }
-  }, [refreshDuplicates])
-
-  useEffect(() => {
-    void fetchSubscriptions()
-    const refresh = () => { void fetchSubscriptions() }
-    window.addEventListener('subtrack:data-changed', refresh)
-    return () => window.removeEventListener('subtrack:data-changed', refresh)
-  }, [fetchSubscriptions])
 
   async function handleMerge(pair: DuplicatePair) {
     if (merging || dismissingDuplicate || duplicateOperationRef.current) return
@@ -153,11 +115,12 @@ export default function SubscriptionsPage() {
     setMerging(pair.merge.id)
     try {
       await mergeSubscription(session.access_token, pair.merge.id, pair.keep.id)
-      duplicateRequestRef.current += 1
-      setDuplicateChecking(false)
-      setDuplicates(prev => prev.filter(p => p.merge.id !== pair.merge.id))
+      void duplicatesQuery.mutate(
+        prev => prev?.filter(p => p.merge.id !== pair.merge.id),
+        { revalidate: false },
+      )
       toast.success(`Merged into ${pair.keep.name}`)
-      await fetchSubscriptions()
+      await Promise.all([subscriptionsQuery.mutate(), duplicatesQuery.mutate()])
     } catch {
       toast.error('Could not merge')
     } finally {
@@ -187,10 +150,10 @@ export default function SubscriptionsPage() {
         pair.keep.id,
         pair.merge.id,
       )
-      duplicateRequestRef.current += 1
-      setDuplicateChecking(false)
-      setDuplicateError('')
-      setDuplicates(current => current.filter(item => duplicatePairKey(item) !== key))
+      void duplicatesQuery.mutate(
+        current => current?.filter(item => duplicatePairKey(item) !== key),
+        { revalidate: false },
+      )
       toast.success('These payments will stay separate')
     } catch (caught) {
       toast.error(caught instanceof Error ? caught.message : 'Could not save this decision.')
@@ -201,12 +164,7 @@ export default function SubscriptionsPage() {
   }
 
   async function retryDuplicateCheck() {
-    const { data: { session } } = await createClient().auth.getSession()
-    if (!session) {
-      toast.error('Your session has expired.')
-      return
-    }
-    await refreshDuplicates(session.access_token)
+    await duplicatesQuery.mutate()
   }
 
   // ── add ────────────────────────────────────────────────────────────────────
@@ -216,8 +174,8 @@ export default function SubscriptionsPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
     const created = await createSubscription(session.access_token, formData)
-    setSubscriptions(prev => [created, ...prev])
-    void refreshDuplicates(session.access_token, true)
+    void subscriptionsQuery.mutate(prev => [created, ...(prev ?? [])], { revalidate: false })
+    void duplicatesQuery.mutate([], { revalidate: true })
     toast.success('Payment added')
   }
 
@@ -228,8 +186,11 @@ export default function SubscriptionsPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session || !editingSubscription) throw new Error('Not authenticated')
     const updated = await updateSubscription(session.access_token, editingSubscription.id, formData)
-    setSubscriptions(prev => prev.map(s => s.id === editingSubscription.id ? updated : s))
-    void refreshDuplicates(session.access_token, true)
+    void subscriptionsQuery.mutate(
+      prev => prev?.map(s => s.id === editingSubscription.id ? updated : s),
+      { revalidate: false },
+    )
+    void duplicatesQuery.mutate([], { revalidate: true })
     setEditingSubscription(null)
     toast.success('Payment updated')
   }
@@ -241,11 +202,11 @@ export default function SubscriptionsPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) throw new Error('Not authenticated')
     await deleteSubscription(session.access_token, id)
-    setSubscriptions(prev => prev.filter(s => s.id !== id))
-    setDuplicates(current => current.filter(
-      pair => pair.keep.id !== id && pair.merge.id !== id,
-    ))
-    void refreshDuplicates(session.access_token)
+    void subscriptionsQuery.mutate(prev => prev?.filter(s => s.id !== id), { revalidate: false })
+    void duplicatesQuery.mutate(
+      current => current?.filter(pair => pair.keep.id !== id && pair.merge.id !== id),
+      { revalidate: true },
+    )
     toast.success('Payment deleted')
   }
 
@@ -300,22 +261,37 @@ export default function SubscriptionsPage() {
       if (scope === 'history' && !isTerminalStatus(s.status)) return false
       if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false
       if (selectedCategory && s.category !== selectedCategory) return false
-      if (!inPeriod(s.next_expected_at, period)) return false
-      const dueDate = storedDateKey(s.next_expected_at)
-      if (fromDate && (!dueDate || dueDate < fromDate)) return false
-      if (toDate && (!dueDate || dueDate > toDate)) return false
+      if (period === 'custom') {
+        const dueDate = storedDateKey(s.next_expected_at)
+        if (fromDate && (!dueDate || dueDate < fromDate)) return false
+        if (toDate && (!dueDate || dueDate > toDate)) return false
+      } else if (!inPeriod(s.next_expected_at, period)) {
+        return false
+      }
       return true
     })
+    const monthlyCost = (subscription: Subscription) =>
+      convertAmount(monthlyEquivalentNative(subscription), subscription.currency)
     list = [...list].sort((a, b) => {
+      if (sortBy === 'name') return a.name.localeCompare(b.name)
+      if (sortBy === 'recent') return b.created_at.localeCompare(a.created_at)
+      if (sortBy === 'amount') {
+        const ma = monthlyCost(a)
+        const mb = monthlyCost(b)
+        if (ma === null && mb === null) return a.name.localeCompare(b.name)
+        if (ma === null) return 1
+        if (mb === null) return -1
+        return mb - ma
+      }
       const da = a.next_expected_at ?? ''
       const db = b.next_expected_at ?? ''
       if (!da && !db) return 0
       if (!da) return 1
       if (!db) return -1
-      return sortOrder === 'desc' ? db.localeCompare(da) : da.localeCompare(db)
+      return da.localeCompare(db)
     })
     return list
-  }, [subscriptions, scope, search, selectedCategory, period, fromDate, toDate, sortOrder])
+  }, [subscriptions, scope, search, selectedCategory, period, fromDate, toDate, sortBy, convertAmount])
 
   const filteredContributing = filtered.filter(contributesToCommitment)
   const filteredConvertible = filteredContributing.filter(
@@ -334,7 +310,27 @@ export default function SubscriptionsPage() {
       : `${filtered.length} item${filtered.length !== 1 ? 's' : ''} · ${formatCurrency(totalAmount, baseCurrency)}/mo current commitment${filteredUnavailable ? ` · ${filteredUnavailable} excluded (FX unavailable)` : ''}`
     : ''
 
-  const isFiltered = !!(scope !== 'current' || search || selectedCategory || period !== 'all' || fromDate || toDate)
+  const scopeCounts: Record<RecordScope, number> = {
+    current: current.length,
+    paused: subscriptions.filter(item => item.status === 'paused').length,
+    history: subscriptions.filter(item => isTerminalStatus(item.status)).length,
+    all: subscriptions.length,
+  }
+
+  const categoryTotals = useMemo(() => {
+    const totals = new Map<string, number>()
+    for (const subscription of subscriptions) {
+      if (!contributesToCommitment(subscription)) continue
+      const monthly = convertAmount(monthlyEquivalentNative(subscription), subscription.currency)
+      if (monthly === null) continue
+      totals.set(subscription.category, (totals.get(subscription.category) ?? 0) + monthly)
+    }
+    return [...totals.entries()]
+      .map(([category, total]) => ({ category, total }))
+      .sort((a, b) => b.total - a.total)
+  }, [subscriptions, convertAmount])
+
+  const isFiltered = !!(scope !== 'current' || search || selectedCategory || period !== 'all')
 
   useRegisterAgentPageContext({
     selected_subscription_ids: editingSubscription
@@ -348,10 +344,13 @@ export default function SubscriptionsPage() {
     filters: {
       ...(search ? { search } : {}),
       ...(selectedCategory ? { category: selectedCategory } : {}),
-      due_period: period,
-      ...(fromDate ? { from_date: fromDate } : {}),
-      ...(toDate ? { to_date: toDate } : {}),
-      sort_order: sortOrder,
+      ...(period === 'custom'
+        ? {
+            ...(fromDate ? { from_date: fromDate } : {}),
+            ...(toDate ? { to_date: toDate } : {}),
+          }
+        : { due_period: period }),
+      sort_by: sortBy,
       group_by_category: groupByCategory,
       record_scope: scope,
     },
@@ -395,17 +394,34 @@ export default function SubscriptionsPage() {
     )
   }
 
+  function renderAttention(className = '') {
+    if (loading || (missingDates === 0 && (ratesLoading || unconvertedCurrent === 0))) return null
+    return (
+      <section className={`rounded-xl border border-amber-500/25 bg-amber-500/5 p-4 ${className}`}>
+        <h2 className="text-sm font-semibold text-foreground">Needs attention</h2>
+        <ul className="mt-1 space-y-1 text-xs leading-5 text-muted-foreground">
+          {missingDates > 0 ? (
+            <li>{missingDates} current payment{missingDates === 1 ? '' : 's'} need a next expected date for reminders and forecasts.</li>
+          ) : null}
+          {!ratesLoading && unconvertedCurrent > 0 ? (
+            <li>{unconvertedCurrent} payment{unconvertedCurrent === 1 ? '' : 's'} are excluded from totals until a reliable exchange rate is available.</li>
+          ) : null}
+        </ul>
+      </section>
+    )
+  }
+
   // ─── render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-8 space-y-6">
+    <div className="mx-auto w-full max-w-7xl px-4 py-8 space-y-6 sm:px-6 lg:px-8">
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Recurring payments</h1>
           {!loading && subscriptions.length > 0 && (
-            <p className="text-sm text-muted-foreground mt-1 tabular-nums">
+            <p className="text-sm text-muted-foreground mt-1 tabular-nums xl:hidden">
               {paid.length} paid{trials.length ? ` · ${trials.length} free trial${trials.length === 1 ? '' : 's'}` : ''} ·{' '}
               {ratesLoading ? 'updating exchange rates…' : (
                 <>
@@ -417,7 +433,7 @@ export default function SubscriptionsPage() {
             </p>
           )}
           {!loading && ratesStale ? (
-            <p className="mt-1 text-xs text-muted-foreground">Foreign-currency totals use cached rates and are estimates.</p>
+            <p className="mt-1 text-xs text-muted-foreground xl:hidden">Foreign-currency totals use cached rates and are estimates.</p>
           ) : null}
         </div>
         <Button onClick={() => setModalOpen(true)} className="shrink-0">
@@ -426,6 +442,8 @@ export default function SubscriptionsPage() {
         </Button>
       </div>
 
+      <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_18rem] xl:items-start xl:gap-8">
+      <div className="min-w-0 space-y-6">
       {/* Same service tracked twice — the totals are wrong until it's resolved. */}
       {duplicates.map(pair => (
         <div
@@ -470,19 +488,7 @@ export default function SubscriptionsPage() {
         </div>
       ) : null}
 
-      {!loading && (missingDates > 0 || (!ratesLoading && unconvertedCurrent > 0)) ? (
-        <section className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-4" aria-labelledby="payment-attention-heading">
-          <h2 id="payment-attention-heading" className="text-sm font-semibold text-foreground">Needs attention</h2>
-          <ul className="mt-1 space-y-1 text-xs leading-5 text-muted-foreground">
-            {missingDates > 0 ? (
-              <li>{missingDates} current payment{missingDates === 1 ? '' : 's'} need a next expected date for reminders and forecasts.</li>
-            ) : null}
-            {!ratesLoading && unconvertedCurrent > 0 ? (
-              <li>{unconvertedCurrent} payment{unconvertedCurrent === 1 ? '' : 's'} are excluded from totals until a reliable exchange rate is available.</li>
-            ) : null}
-          </ul>
-        </section>
-      ) : null}
+      {renderAttention('xl:hidden')}
 
       {/* Error */}
       {error && (
@@ -490,7 +496,7 @@ export default function SubscriptionsPage() {
           <p className="text-sm text-destructive">{error}</p>
           <button
             className="text-xs text-destructive underline underline-offset-2 mt-1"
-            onClick={() => { setError(null); setLoading(true); fetchSubscriptions() }}
+            onClick={() => { void subscriptionsQuery.mutate() }}
           >
             Try again
           </button>
@@ -538,48 +544,27 @@ export default function SubscriptionsPage() {
       {/* FilterBar + list */}
       {!loading && subscriptions.length > 0 && (
         <>
-          <div className="flex flex-wrap items-center gap-1 rounded-xl bg-muted p-1" role="group" aria-label="Payment record scope">
-            {([
-              { value: 'current', label: 'Current', count: current.length },
-              { value: 'paused', label: 'Paused', count: subscriptions.filter(item => item.status === 'paused').length },
-              { value: 'history', label: 'History', count: subscriptions.filter(item => isTerminalStatus(item.status)).length },
-              { value: 'all', label: 'All', count: subscriptions.length },
-            ] as const).map(option => (
-              <button
-                key={option.value}
-                type="button"
-                aria-pressed={scope === option.value}
-                onClick={() => setScope(option.value)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                  scope === option.value
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {option.label} <span className="ml-1 tabular-nums opacity-70">{option.count}</span>
-              </button>
-            ))}
-          </div>
-
           <FilterBar
+            scope={scope}
+            scopeCounts={scopeCounts}
+            onScopeChange={setScope}
             categories={categories}
             selectedCategory={selectedCategory}
             onCategoryChange={category => setSelectedCategory(category as Category | '')}
             period={period}
-            onPeriodChange={p => setPeriod(p as 'all' | 'day' | 'week' | 'month')}
+            onPeriodChange={setPeriod}
             fromDate={fromDate}
             toDate={toDate}
             onFromDateChange={setFromDate}
             onToDateChange={setToDate}
-            sortOrder={sortOrder}
-            onSortOrderChange={setSortOrder}
+            sortBy={sortBy}
+            onSortByChange={setSortBy}
             groupByCategory={groupByCategory}
             onGroupByCategoryChange={setGroupByCategory}
             totalLabel={totalLabel}
             searchQuery={search}
             onSearchChange={setSearch}
             onClearFilters={() => {
-              setScope('current')
               setSearch('')
               setSelectedCategory('')
               setPeriod('all')
@@ -599,15 +584,15 @@ export default function SubscriptionsPage() {
                   ? 'No results for your search'
                   : selectedCategory
                   ? `No ${formatCategory(selectedCategory)} items`
+                  : period !== 'all'
+                    ? 'No payments due in this period'
                   : scope === 'current'
                     ? 'No current payments'
                   : scope === 'paused'
                     ? 'No paused payments'
                     : scope === 'history'
                       ? 'No payment history yet'
-                      : scope === 'all'
-                        ? 'No payments match these filters'
-                  : 'No items in this period'}
+                      : 'No payments match these filters'}
               </p>
               <Button
                 variant="ghost"
@@ -632,6 +617,70 @@ export default function SubscriptionsPage() {
           )}
         </>
       )}
+
+      </div>
+
+      {!loading && subscriptions.length > 0 ? (
+        <aside className="hidden space-y-4 xl:sticky xl:top-8 xl:block xl:max-h-[calc(100vh-4rem)] xl:overflow-y-auto" aria-label="Payments summary">
+          <section className="rounded-2xl bg-card p-5 shadow-sm">
+            <p className="text-xs font-medium text-muted-foreground">
+              {hasVariableAmounts ? 'Estimated monthly commitment' : 'Monthly commitment'}
+            </p>
+            <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">
+              {ratesLoading ? '…' : `${hasVariableAmounts ? '≈ ' : ''}${formatCurrency(totalMonthly, baseCurrency)}`}
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground tabular-nums">
+              {ratesLoading ? 'Updating exchange rates…' : `${hasVariableAmounts ? '≈ ' : ''}${formatCurrency(totalYearly, baseCurrency)} a year`}
+            </p>
+            <p className="mt-3 text-xs text-muted-foreground tabular-nums">
+              {paid.length} paid{trials.length ? ` · ${trials.length} free trial${trials.length === 1 ? '' : 's'}` : ''}
+              {unconvertedCurrent ? ` · ${unconvertedCurrent} excluded (FX unavailable)` : ''}
+            </p>
+            {ratesStale ? (
+              <p className="mt-2 text-xs text-muted-foreground">Foreign-currency totals use cached rates and are estimates.</p>
+            ) : null}
+          </section>
+
+          {renderAttention()}
+
+          {categoryTotals.length > 0 && totalMonthly > 0 ? (
+            <section className="rounded-2xl bg-card p-5 shadow-sm">
+              <h2 className="text-sm font-semibold text-foreground">By category</h2>
+              <ul className="mt-3 space-y-1">
+                {categoryTotals.map(({ category, total }) => {
+                  const share = (total / totalMonthly) * 100
+                  return (
+                    <li key={category}>
+                      <button
+                        type="button"
+                        aria-pressed={selectedCategory === category}
+                        onClick={() => setSelectedCategory(selectedCategory === category ? '' : category as Category)}
+                        className={`w-full rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted ${
+                          selectedCategory === category ? 'bg-muted' : ''
+                        }`}
+                      >
+                        <span className="flex items-center justify-between gap-2 text-xs">
+                          <span className="truncate text-foreground">{formatCategory(category)}</span>
+                          <span className="shrink-0 tabular-nums text-muted-foreground">
+                            {formatCurrency(total, baseCurrency)}
+                          </span>
+                        </span>
+                        <span className="mt-1.5 block h-1.5 overflow-hidden rounded-full bg-muted">
+                          <span
+                            className="block h-full rounded-full"
+                            style={{ width: `${Math.max(share, 2)}%`, backgroundColor: categoryColor(category) }}
+                          />
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </section>
+          ) : null}
+        </aside>
+      ) : null}
+      </div>
 
       {/* Add Modal */}
       <AddSubscriptionModal

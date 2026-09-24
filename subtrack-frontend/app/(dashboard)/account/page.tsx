@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useCurrency } from '@/lib/context/currency'
+import { useSWRConfig } from 'swr'
+import { apiKeys, errorMessage, useApi } from '@/lib/hooks/useApi'
 import {
   deleteAccountData,
   disconnectGmail,
@@ -62,9 +64,16 @@ export default function AccountPage() {
   const [incomeError, setIncomeError] = useState('')
   const incomeEdited = useRef(false)
   const [hasSavedIncome, setHasSavedIncome] = useState(false)
-  const [gmail, setGmail] = useState<GmailStatus | null>(null)
-  // The OAuth callback redirects back here with a reason when connecting fails.
+  const gmailQuery = useApi<GmailStatus>(apiKeys.gmailStatus, getGmailStatus, {
+    refreshInterval: latest => (latest?.scan_status === 'running' ? 3000 : 0),
+  })
+  const gmailLoadFailed = Boolean(gmailQuery.error) && !gmailQuery.data
+  const gmail: GmailStatus | null = gmailQuery.data ?? (gmailLoadFailed ? { connected: false } : null)
+  const { mutate: mutateCache } = useSWRConfig()
   const [gmailError, setGmailError] = useState<string | null>(null)
+  const shownGmailError = gmailError
+    ?? (gmailLoadFailed ? errorMessage(gmailQuery.error, 'Could not load Gmail status.') : null)
+  // The OAuth callback redirects back here with a reason when connecting fails.
   const [gmailBusy, setGmailBusy] = useState(false)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
@@ -93,18 +102,6 @@ export default function AccountPage() {
     }
     void loadIncome()
 
-    async function loadGmail() {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) return
-      try {
-        setGmail(await getGmailStatus(session.access_token))
-      } catch (error) {
-        setGmail({ connected: false })
-        setGmailError(error instanceof Error ? error.message : 'Could not load Gmail status.')
-      }
-    }
-    void loadGmail()
-
     // Read (and clear) the outcome the callback redirected with, so a failed
     // connect explains itself instead of just appearing not to have worked.
     const params = new URLSearchParams(window.location.search)
@@ -125,23 +122,6 @@ export default function AccountPage() {
       window.history.replaceState({}, '', window.location.pathname)
     }
   }, [])
-
-  // While a scan runs, poll for the outcome. Without this the "Scanning"
-  // button stays disabled forever — even after the scan ends — until the
-  // user happens to refresh the page.
-  useEffect(() => {
-    if (gmail?.scan_status !== 'running') return
-    const timer = setInterval(async () => {
-      const { data: { session } } = await createClient().auth.getSession()
-      if (!session) return
-      try {
-        setGmail(await getGmailStatus(session.access_token))
-      } catch {
-        // Transient poll failure — keep the last known state and retry.
-      }
-    }, 3000)
-    return () => clearInterval(timer)
-  }, [gmail?.scan_status])
 
   async function withToken<T>(fn: (token: string) => Promise<T>) {
     const { data: { session } } = await createClient().auth.getSession()
@@ -173,7 +153,7 @@ export default function AccountPage() {
     try {
       await withToken(async token => {
         await startGmailScan(token)
-        setGmail(g => (g ? {
+        void gmailQuery.mutate(g => (g ? {
           ...g,
           scan_status: 'running',
           scan_error: null,
@@ -182,7 +162,7 @@ export default function AccountPage() {
           scan_total: 0,
           scan_partial: false,
           scan_message: null,
-        } : g))
+        } : g), { revalidate: false })
         router.push('/review')
       })
     } catch (e) {
@@ -196,7 +176,7 @@ export default function AccountPage() {
     try {
       await withToken(async token => {
         const result = await disconnectGmail(token)
-        setGmail({ connected: false })
+        void gmailQuery.mutate({ connected: false }, { revalidate: false })
         setConfirmDisconnect(false)
         if (result.gmail_revocation === 'failed') {
           toast.warning('Gmail was disconnected from Subtrack, but Google could not be reached to revoke access. Remove Subtrack from your Google Account permissions to revoke it manually.')
@@ -225,6 +205,7 @@ export default function AccountPage() {
       incomeEdited.current = false
       setHasSavedIncome(true)
       setIncomeStatus('saved')
+      void mutateCache(apiKeys.preferences)
       setIncomeError('')
     } catch (error) {
       setIncomeStatus('error')
@@ -235,6 +216,7 @@ export default function AccountPage() {
   async function handleCurrencyChange(currency: Currency) {
     try {
       const result = await setBaseCurrency(currency)
+      void mutateCache(apiKeys.preferences)
       if (result.preferences.monthly_income !== null) {
         setIncome(String(result.preferences.monthly_income))
         setHasSavedIncome(true)
@@ -270,6 +252,7 @@ export default function AccountPage() {
       incomeEdited.current = false
       setHasSavedIncome(false)
       setIncomeStatus('cleared')
+      void mutateCache(apiKeys.preferences)
       setIncomeError('')
     } catch (error) {
       setIncomeStatus('error')
@@ -567,12 +550,12 @@ export default function AccountPage() {
             <div className="space-y-3">
               {/* Connecting happens across a Google redirect, so a failure has
                   to be reported here or it looks like nothing happened. */}
-              {gmailError && (
+              {shownGmailError && (
                 <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-3">
                   <p className="text-sm font-medium text-destructive">
                     Couldn&apos;t connect Gmail
                   </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{gmailError}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{shownGmailError}</p>
                 </div>
               )}
 

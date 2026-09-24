@@ -3,10 +3,12 @@ import { CurrencyProvider } from '@/lib/context/currency'
 import { Toaster } from '@/components/ui/sonner'
 import { AgentChat } from '@/components/agent/AgentChat'
 import { AgentPageContextProvider } from '@/lib/agent/page-context'
+import { ApiCacheProvider } from '@/components/providers/ApiCacheProvider'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <CurrencyProvider>
+      <ApiCacheProvider>
       <AgentPageContextProvider>
         <div className="flex min-h-screen">
           <Navbar />
@@ -16,6 +18,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <AgentChat />
         </div>
       </AgentPageContextProvider>
+      </ApiCacheProvider>
       <Toaster />
     </CurrencyProvider>
   )

@@ -2,9 +2,10 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { useEffect, useState } from 'react'
 import { LayoutDashboard, CreditCard, LogOut, UserCircle, MailCheck, Sparkles } from 'lucide-react'
 import { getDetected, getGmailStatus } from '@/lib/api'
+import { apiKeys, useApi } from '@/lib/hooks/useApi'
+import type { GmailStatus } from '@/types'
 import { Logo, LogoMark } from '@/components/layout/Logo'
 
 const links = [
@@ -18,26 +19,10 @@ const links = [
 export default function Navbar() {
   const pathname = usePathname()
   const router = useRouter()
-  const [pendingCount, setPendingCount] = useState(0)
-  const [gmailConnected, setGmailConnected] = useState<boolean | null>(null)
-
-  useEffect(() => {
-    async function loadPending() {
-      const { data: { session } } = await createClient().auth.getSession()
-      if (!session) return
-      try {
-        const [detected, gmail] = await Promise.all([
-          getDetected(session.access_token),
-          getGmailStatus(session.access_token).catch(() => null),
-        ])
-        setPendingCount(detected.length)
-        setGmailConnected(gmail?.connected ?? null)
-      } catch {
-        // A badge is not worth surfacing an error for.
-      }
-    }
-    loadPending()
-  }, [pathname])
+  const detected = useApi(apiKeys.detected('pending'), token => getDetected(token, 'pending'))
+  const gmail = useApi<GmailStatus>(apiKeys.gmailStatus, token => getGmailStatus(token))
+  const pendingCount = detected.data?.length ?? 0
+  const gmailConnected = gmail.data ? gmail.data.connected : null
 
   async function handleLogout() {
     await createClient().auth.signOut()
@@ -96,6 +81,14 @@ export default function Navbar() {
           <LogoMark className="h-6 w-6" />
           <span className="text-sm font-semibold tracking-tight text-foreground">Subtrack</span>
         </Link>
+        <button
+          type="button"
+          onClick={handleLogout}
+          aria-label="Log out"
+          className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <LogOut className="h-4 w-4" />
+        </button>
       </header>
 
       <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-sidebar px-3 py-6 md:flex">
