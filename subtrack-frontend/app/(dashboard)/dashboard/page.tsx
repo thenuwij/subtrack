@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import {
   dismissReminder,
+  restoreReminder,
   getDetected,
   getGmailStatus,
   getPreferences,
@@ -204,9 +205,22 @@ export default function DashboardPage() {
         current => current?.filter(reminder => reminder.id !== id),
         { revalidate: false },
       )
-      toast.success('Reminder dismissed')
+      toast.success('Reminder dismissed', {
+        action: { label: 'Undo', onClick: () => void handleUndoDismissReminder(id) },
+      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not dismiss reminder.')
+    }
+  }
+
+  async function handleUndoDismissReminder(id: string) {
+    try {
+      const accessToken = await getAccessToken()
+      if (!accessToken) throw new Error('Your session has expired.')
+      await restoreReminder(accessToken, id)
+      void remindersQuery.mutate()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not restore reminder.')
     }
   }
 

@@ -230,6 +230,17 @@ export default function ReviewPage() {
     setBusy(null)
   }
 
+  async function undoDismiss(id: string) {
+    try {
+      const t = await token()
+      if (!t) throw new Error('Your session has expired. Sign in again to continue.')
+      await restoreDetected(t, id)
+      void itemsQuery.mutate()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not restore this detection.')
+    }
+  }
+
   async function restore(id: string) {
     if (!beginBusy(id)) return
     try {
@@ -340,7 +351,9 @@ export default function ReviewPage() {
       await dismissDetected(t, id)
       // Drop it locally rather than refetching — the row is gone either way.
       removeItem(id)
-      toast.success('Detection dismissed')
+      toast.success('Detection dismissed', {
+        action: { label: 'Undo', onClick: () => void undoDismiss(id) },
+      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not dismiss this detection.')
     } finally {
