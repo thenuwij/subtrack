@@ -1,11 +1,12 @@
 'use client'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 import { LayoutDashboard, CreditCard, LogOut, UserCircle, MailCheck, Sparkles } from 'lucide-react'
 import { getDetected, getGmailStatus } from '@/lib/api'
 import { apiKeys, useApi } from '@/lib/hooks/useApi'
-import { endDemo } from '@/lib/auth/session'
+import { signOut } from '@/lib/auth/session'
+import { useCurrentUser } from '@/lib/hooks/useCurrentUser'
+import { UserAvatar } from '@/components/layout/UserAvatar'
 import type { GmailStatus } from '@/types'
 import { Logo, LogoMark } from '@/components/layout/Logo'
 
@@ -24,10 +25,10 @@ export default function Navbar() {
   const gmail = useApi<GmailStatus>(apiKeys.gmailStatus, token => getGmailStatus(token))
   const pendingCount = detected.data?.length ?? 0
   const gmailConnected = gmail.data ? gmail.data.connected : null
+  const currentUser = useCurrentUser()
 
   async function handleLogout() {
-    endDemo()
-    await createClient().auth.signOut()
+    await signOut()
     router.push('/login')
   }
 
@@ -87,14 +88,14 @@ export default function Navbar() {
         <button
           type="button"
           onClick={handleLogout}
-          aria-label="Log out"
-          className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="ml-auto flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <LogOut className="h-4 w-4" />
+          Sign out
         </button>
       </header>
 
-      <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-sidebar px-3 py-6 md:flex">
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col overflow-y-auto border-r border-border bg-sidebar px-3 py-6 md:flex">
         <div className="mb-8 px-3">
           <Link href="/dashboard" aria-label="Subtrack dashboard">
             <Logo />
@@ -118,13 +119,35 @@ export default function Navbar() {
           </Link>
         )}
 
-        <button
-          onClick={handleLogout}
-          className="mx-0 flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <LogOut className="h-4 w-4 shrink-0" />
-          Logout
-        </button>
+        <div className="border-t border-border pt-3">
+          <Link
+            href="/account"
+            className="flex items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-muted"
+          >
+            <UserAvatar
+              name={currentUser.name}
+              email={currentUser.email}
+              avatarUrl={currentUser.avatarUrl}
+              className="h-8 w-8 text-xs"
+            />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium text-foreground">
+                {currentUser.name || currentUser.email || 'Your account'}
+              </span>
+              {currentUser.name && currentUser.email ? (
+                <span className="block truncate text-xs text-muted-foreground">{currentUser.email}</span>
+              ) : null}
+            </span>
+          </Link>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="mt-1 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <LogOut className="h-4 w-4 shrink-0" />
+            Sign out
+          </button>
+        </div>
       </aside>
 
       <nav
